@@ -340,6 +340,15 @@ def identify_risks(tokens: list[str]) -> list[RiskWarning]:
                        "difficult to undo if sensitive data is included",
                 severity="medium",
             ))
+        # git clean -x: ignores .gitignore, deletes .env and secrets
+        if "clean" in args and ("-x" in args or "-fdx" in args or "-fx" in " ".join(args)):
+            warnings.append(RiskWarning(
+                category="git",
+                command=full_cmd,
+                reason="git clean -x ignores .gitignore — .env, secrets, "
+                       "and local config WILL be deleted",
+                severity="high",
+            ))
 
     # ── Recursive permission changes ───────────────────────────────
     if cmd in ("chmod", "chown") and "-R" in args:
