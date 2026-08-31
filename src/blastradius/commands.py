@@ -243,30 +243,44 @@ def identify_risks(tokens: list[str]) -> list[RiskWarning]:
     warnings: list[RiskWarning] = []
 
     # ── Package installation (arbitrary code execution) ────────────
+    # Severity: medium for known PyPI packages (the common case),
+    # high for git URLs or local paths (less trusted sources).
     if cmd in ("pip", "pip3", "python3", "python") and "install" in args:
         # python -m pip install, pip install, etc.
         if cmd in ("python", "python3") and "-m" in args:
-            # python -m pip install foo
             try:
                 m_idx = args.index("-m")
                 if m_idx + 1 < len(args) and args[m_idx + 1] in ("pip", "pip3"):
                     if "install" in args[m_idx + 2:]:
+                        # Check if installing from a non-PyPI source
+                        is_non_pypi = any(
+                            a.startswith("git+") or a.startswith("/") or
+                            a.startswith("./") or a.startswith("../") or
+                            ".git" in a
+                            for a in args
+                        )
                         warnings.append(RiskWarning(
                             category="package",
                             command=full_cmd,
-                            reason="pip install executes setup.py from the package — "
+                            reason="pip install executes setup.py — "
                                    "arbitrary code runs on your machine",
-                            severity="high",
+                            severity="high" if is_non_pypi else "medium",
                         ))
             except (ValueError, IndexError):
                 pass
         elif cmd in ("pip", "pip3"):
+            is_non_pypi = any(
+                a.startswith("git+") or a.startswith("/") or
+                a.startswith("./") or a.startswith("../") or
+                ".git" in a
+                for a in args
+            )
             warnings.append(RiskWarning(
                 category="package",
                 command=full_cmd,
-                reason="pip install executes setup.py from the package — "
+                reason="pip install executes setup.py — "
                        "arbitrary code runs on your machine",
-                severity="high",
+                severity="high" if is_non_pypi else "medium",
             ))
 
     if cmd in ("npm", "yarn", "pnpm") and "install" in args:
@@ -275,7 +289,7 @@ def identify_risks(tokens: list[str]) -> list[RiskWarning]:
             command=full_cmd,
             reason=f"{cmd} install runs postinstall scripts — "
                    "arbitrary code executes on your machine",
-            severity="high",
+            severity="medium",
         ))
 
     if cmd == "cargo" and "install" in args:
@@ -283,7 +297,7 @@ def identify_risks(tokens: list[str]) -> list[RiskWarning]:
             category="package",
             command=full_cmd,
             reason="cargo install runs build scripts — arbitrary code execution",
-            severity="high",
+            severity="medium",
         ))
 
     # ── Network requests (potential credential exfiltration) ───────
@@ -380,19 +394,32 @@ def identify_risks(tokens: list[str]) -> list[RiskWarning]:
         ))
 
     # ── Config / secret file access ────────────────────────────────
+    # Only warn when the command WRITES to a config/secret file.
+    # Reading (cat, less, head) is less dangerous — the secret stays
+    # on the machine. Writing (echo >, sed -i, mv, cp) creates or
+    # modifies a file that might be committed or deployed.
     config_indicators = [".env", "secrets", "credentials", "id_rsa",
-                         ".pem", ".key", "config.yml", "config.yaml",
-                         "settings.py"]
+                         ".pem", ".key"]
+    write_cmds = {"echo", "sed", "cp", "mv", "tee", "dd", "cat"}
+    # Detect if this is a write operation: redirect (>), sed -i,
+    # cp/mv to a config file, tee, etc.
+    is_write = (
+        cmd in ("sed", "cp", "mv", "tee", "dd") or
+        # echo > .env (redirect detected by > in full_cmd)
+        (cmd == "echo" and ">" in full_cmd) or
+        # cat > .env (redirect)
+        (cmd == "cat" and ">" in full_cmd)
+    )
     for indicator in config_indicators:
-        if indicator in full_cmd:
+        if indicator in full_cmd and is_write:
             warnings.append(RiskWarning(
                 category="config",
                 command=full_cmd,
-                reason=f"command touches {indicator} — potential "
-                       f"credential or secret exposure",
+                reason=f"command writes to {indicator} — potential "
+                       f"credential or secret file creation/modification",
                 severity="high",
             ))
-            break  # one warning per command
+            break
 
     # ── Deployment target indicators ───────────────────────────────
     if "production" in full_cmd or "prod" in non_flags:

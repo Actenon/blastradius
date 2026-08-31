@@ -114,8 +114,9 @@ def format_warnings(warnings: list[RiskWarning], *, command: str) -> str:
         sev_marker = "⚠" if w.severity == "high" else "·"
         lines.append(f"  {sev_marker} [{w.category}] {w.reason}")
     lines.append("")
-    lines.append("  blastradius checked filesystem-destruction targets only.")
-    lines.append("  The warnings above are informational — the command was not blocked.")
+    lines.append(f"  blastradius  ALLOWED — {len(unique)} warning(s), not blocked.")
+    lines.append("  Filesystem-destruction targets were checked; the warnings")
+    lines.append("  above are informational. Review before proceeding.")
     lines.append("")
 
     return "\n".join(lines)
@@ -125,13 +126,14 @@ def format_allowed(*, command: str, warnings: list[RiskWarning]) -> str:
     """Format the ALLOWED summary.
 
     If there are warnings, formats a WARNING block.
-    If there are no warnings, formats a one-line ALLOWED summary.
+    If there are no warnings, formats a one-line ALLOWED summary
+    with the warning count (always 0 in this case).
     """
     if warnings:
         return format_warnings(warnings, command=command)
 
-    # No warnings — one-line summary.
-    return f"blastradius  ALLOWED (filesystem-destruction check only)\n  command   {command}\n"
+    # No warnings — one-line summary with count.
+    return f"blastradius  ALLOWED — 0 warnings, filesystem-destruction check only\n  command   {command}\n"
 
 
 __all__ = [

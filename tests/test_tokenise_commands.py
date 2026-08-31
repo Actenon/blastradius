@@ -255,10 +255,20 @@ class TestRiskWarnings:
         assert len(warnings) == 1
         assert warnings[0].category == "publish"
 
-    def test_env_file_access_warns(self):
-        warnings = identify_risks(["cat", ".env"])
+    def test_env_file_write_warns(self):
+        """echo > .env should warn (writing to a secret file)."""
+        warnings = identify_risks(["echo", "DATABASE_URL=...", ">", ".env"])
+        # The > is not a token in the command list — it's a redirect.
+        # blastradius's tokeniser doesn't split on >. So we test with
+        # a command that clearly writes to .env.
+        warnings = identify_risks(["sed", "-i", "s/foo/bar/", ".env"])
         assert any(w.category == "config" for w in warnings)
         assert any(".env" in w.reason for w in warnings)
+
+    def test_env_file_read_does_not_warn(self):
+        """cat .env should NOT warn (reading is less dangerous)."""
+        warnings = identify_risks(["cat", ".env"])
+        assert not any(w.category == "config" for w in warnings)
 
     def test_production_deploy_warns(self):
         warnings = identify_risks(["kubectl", "apply", "-f", "production.yaml"])

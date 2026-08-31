@@ -34,26 +34,41 @@ def main(argv: list[str] | None = None) -> int:
         _print_help()
         return 0
 
+    # Parse global flags that can appear before the command.
+    strict = False
+    quiet = False
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--strict":
+            strict = True
+        elif a == "--quiet":
+            quiet = True
+        elif a == "--help" or a == "-h":
+            _print_help()
+            return 0
+        elif a == "--version":
+            _print_version()
+            return 0
+        else:
+            rest.append(a)
+        i += 1
+
     # Subcommands.
-    if argv[0] == "hook":
-        return _cmd_hook(argv[1:])
-    if argv[0] == "install":
-        return _cmd_install(argv[1:])
-    if argv[0] == "--help" or argv[0] == "-h":
-        _print_help()
-        return 0
-    if argv[0] == "--version":
-        _print_version()
-        return 0
+    if rest and rest[0] == "hook":
+        return _cmd_hook(rest[1:], strict=strict)
+    if rest and rest[0] == "install":
+        return _cmd_install(rest[1:])
 
-    # Wrapper mode: blastradius -- <command...>
-    if argv[0] == "--":
-        return _cmd_wrapper(argv[1:])
+    # Wrapper mode: blastradius [--strict] [--quiet] -- <command...>
+    if rest and rest[0] == "--":
+        return _cmd_wrapper(rest[1:], strict=strict, quiet=quiet)
 
-    # If the first arg looks like a command (not a flag), treat the
-    # whole thing as wrapper mode without the --.
-    if not argv[0].startswith("-"):
-        return _cmd_wrapper(argv)
+    # If the first remaining arg looks like a command (not a flag),
+    # treat the whole thing as wrapper mode without the --.
+    if rest and not rest[0].startswith("-"):
+        return _cmd_wrapper(rest, strict=strict, quiet=quiet)
 
     _print_help()
     return 2
@@ -64,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _cmd_wrapper(command_args: list[str]) -> int:
+def _cmd_wrapper(command_args: list[str], *, strict: bool = False, quiet: bool = False) -> int:
     if not command_args:
         print("blastradius: no command given after --", file=sys.stderr)
         return 2
@@ -74,42 +89,42 @@ def _cmd_wrapper(command_args: list[str]) -> int:
 
     result = check_command(command)
 
-    # ── Print warnings (if any) before deciding ────────────────────
-    if result.has_warnings:
+    # ── In strict mode, warnings become blocks ─────────────────────
+    if strict and result.has_warnings and result.allowed:
+        # Print the warnings, then block
         print(format_warnings(result.warnings, command=command), file=sys.stderr)
+        print("  --strict is set: warnings are treated as blocks.", file=sys.stderr)
+        print("  Remove --strict to allow this command, or fix the warnings.", file=sys.stderr)
+        return 1
 
+    # ── Print output ────────────────────────────────────────────────
     if result.allowed:
-        # Print the ALLOWED summary (one line, no warnings case).
-        if not result.has_warnings:
-            print(format_allowed(command=command, warnings=result.warnings),
-                  file=sys.stderr)
+        if result.has_warnings:
+            # Warnings are always shown, even in --quiet mode.
+            print(format_warnings(result.warnings, command=command), file=sys.stderr)
+        else:
+            # The ALLOWED summary is suppressed in --quiet mode.
+            if not quiet:
+                print(format_allowed(command=command, warnings=result.warnings),
+                      file=sys.stderr)
 
         # Exec the command.
         try:
             os.execvp(command_args[0], command_args)
         except FileNotFoundError:
-            print(
-                f"blastradius: command not found: {command_args[0]}",
-                file=sys.stderr,
-            )
+            print(f"blastradius: command not found: {command_args[0]}", file=sys.stderr)
             return 127
         except PermissionError:
-            print(
-                f"blastradius: permission denied: {command_args[0]}",
-                file=sys.stderr,
-            )
+            print(f"blastradius: permission denied: {command_args[0]}", file=sys.stderr)
             return 126
         return 0  # unreachable
 
-    # Refused — print the refusal and exit non-zero.
+    # Refused.
     if len(result.refusals) == 1:
         refusal, _ = result.refusals[0]
         print(format_refusal(refusal, command=command), file=sys.stderr)
     else:
-        print(
-            format_multi_refusal(result.refusals, command=command),
-            file=sys.stderr,
-        )
+        print(format_multi_refusal(result.refusals, command=command), file=sys.stderr)
     return 1
 
 
@@ -118,17 +133,11 @@ def _cmd_wrapper(command_args: list[str]) -> int:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _cmd_hook(_args: list[str]) -> int:
+def _cmd_hook(_args: list[str], *, strict: bool = False) -> int:
     """Read a PreToolUse payload from stdin, output a decision.
 
-    Claude Code sends JSON on stdin:
-      {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp"}}
-
-    We output JSON on stdout:
-      {"decision": "block", "reason": "..."}  — block
-      {} or nothing                           — allow
-
-    Exit code 0 in both cases (the decision is in the JSON).
+    In strict mode, warnings are treated as blocks — the hook returns
+    {"decision": "block"} for any command that has warnings.
     """
     try:
         raw_input = sys.stdin.read()
@@ -155,8 +164,16 @@ def _cmd_hook(_args: list[str]) -> int:
     result = check_command(command)
 
     if result.allowed:
-        # Allow — but if there are warnings, surface them as a
-        # non-blocking hook decision so the developer sees them.
+        # In strict mode, warnings become blocks.
+        if strict and result.has_warnings:
+            warning_text = format_warnings(result.warnings, command=command)
+            print(json.dumps({
+                "decision": "block",
+                "reason": warning_text + "\n  --strict is set: warnings are treated as blocks.",
+            }))
+            return 0
+
+        # Allow — but if there are warnings, surface them.
         if result.has_warnings:
             warning_text = format_warnings(result.warnings, command=command)
             print(json.dumps({
@@ -212,17 +229,28 @@ def _print_help() -> None:
         """blastradius — a deterministic guard between AI agents and the shell.
 
 Usage:
-  blastradius -- <command>          Wrapper mode: check then exec
-  blastradius hook                  Hook mode: read PreToolUse JSON from stdin
-  blastradius install --claude-code Install the Claude Code hook
-  blastradius install --cursor      Install the Cursor hook
-  blastradius --version             Print version
-  blastradius --help                 Show this help
+  blastradius [flags] -- <command>   Wrapper mode: check then exec
+  blastradius hook [flags]            Hook mode: read PreToolUse JSON from stdin
+  blastradius install --claude-code   Install the Claude Code hook
+  blastradius install --cursor        Install the Cursor hook
+  blastradius --version               Print version
+  blastradius --help                   Show this help
+
+Flags:
+  --strict    Treat warnings as blocks. A command with any warning
+              (pip install, curl, git push, etc.) is refused.
+              Useful for high-security environments or CI gates.
+  --quiet     Suppress the ALLOWED summary on safe commands.
+              Warnings and blocks are still printed.
 
 Wrapper mode:
   blastradius -- rm -rf /tmp/foo
+  blastradius --strict -- pip install stripe
+  blastradius --quiet -- ls -la
+
   Checks the command. If allowed, execs it. If refused, prints the
-  refusal and exits non-zero.
+  refusal and exits non-zero. Warnings are printed to stderr but
+  do not block unless --strict is set.
 
 Hook mode:
   Reads a JSON payload from stdin (Claude Code PreToolUse format),
