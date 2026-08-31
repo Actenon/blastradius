@@ -1,22 +1,29 @@
 """Core check function — the decision pipeline.
 
-Given a command string, run it through:
-  1. Tokeniser (refuse unparseable)
-  2. Command identifier (is it destructive?)
-  3. Target resolver (variables → tilde → globs → canonical)
-  4. Floor rules (unoverridable)
-  5. Scope check
-  6. Glob breadth
+v0.3.0: Two-tier checking:
 
-Returns either a list of refusals (block) or an empty list (allow).
+  TIER 1 (BLOCK): filesystem-destruction commands are checked against
+    floor rules and scope. If a target is floor or out-of-scope, the
+    command is BLOCKED (exit 1).
+
+  TIER 2 (WARN): non-filesystem consequential actions (pip install,
+    curl, git push, twine, chmod -R, .env access, deployment) produce
+    WARNINGS that are printed to stderr but do not block. The developer
+    decides whether to proceed.
+
+The command is also split on &&, ||, ;, | — each segment is checked
+independently. A compound command is blocked if ANY segment is blocked.
+
+On ALLOW, the checker prints a one-line summary so the developer knows
+what was checked and what wasn't — silence is never the output.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .commands import DestructiveAction, identify_destructive
+from .commands import DestructiveAction, RiskWarning, identify_destructive, identify_risks
 from .resolve import Refusal, Resolved, resolve_target
 from .rules import (
     DEFAULT_MAX_GLOB_BREADTH,
@@ -34,13 +41,23 @@ class CheckResult:
     """The result of checking a command."""
 
     allowed: bool
-    refusals: list[tuple[Refusal, str]]  # (refusal, target_raw)
-    command: str
-    action: DestructiveAction | None = None
+    refusals: list[tuple[Refusal, str]] = field(default_factory=list)
+    warnings: list[RiskWarning] = field(default_factory=list)
+    command: str = ""
+    actions: list[DestructiveAction] = field(default_factory=list)
+    segments_checked: int = 0
 
     @property
     def first_refusal(self) -> Refusal | None:
         return self.refusals[0][0] if self.refusals else None
+
+    @property
+    def blocked(self) -> bool:
+        return not self.allowed
+
+    @property
+    def has_warnings(self) -> bool:
+        return len(self.warnings) > 0
 
 
 def check_command(
@@ -53,9 +70,13 @@ def check_command(
 ) -> CheckResult:
     """Check a command string. Returns CheckResult.
 
-    If the command is not destructive, returns allowed=True.
-    If the command is destructive and all targets pass, returns allowed=True.
-    If any target is refused, returns allowed=False with the refusals.
+    TIER 1: If any segment is a filesystem-destruction command with a
+    target that is floor or out-of-scope, the command is BLOCKED.
+
+    TIER 2: If any segment contains a consequential non-filesystem
+    action, a WARNING is added. Warnings do not block.
+
+    On ALLOW, the result includes a summary of what was checked.
     """
     if cwd is None:
         cwd = os.getcwd()
@@ -64,7 +85,7 @@ def check_command(
     if scope is None:
         scope = load_scope(cwd)
 
-    # ── Step 1: Tokenise ────────────────────────────────────────────
+    # ── Step 1: Tokenise (splits on &&, ||, ;, |) ──────────────────
     tok_result = tokenise(command)
     if tok_result.refusal:
         return CheckResult(
@@ -73,23 +94,29 @@ def check_command(
             command=command,
         )
 
-    tokens = tok_result.tokens or []
+    segments = tok_result.segments or []
 
-    # ── Step 2: Identify destructive command ────────────────────────
-    action = identify_destructive(tokens)
-    if action is None:
-        # Not destructive — allow.
-        return CheckResult(allowed=True, refusals=[], command=command)
+    # ── Step 2: Check each segment ──────────────────────────────────
+    all_refusals: list[tuple[Refusal, str]] = []
+    all_warnings: list[RiskWarning] = []
+    all_actions: list[DestructiveAction] = []
 
-    # BUG 5 fix: refuse destructive commands with zero targets.
-    # An rm with no targets is suspicious — the intent is unclear
-    # and it may be a misparsed command. Fail closed.
-    if not action.targets:
-        from .resolve import Refusal as _Refusal
-        return CheckResult(
-            allowed=False,
-            refusals=[(
-                _Refusal(
+    for seg_tokens in segments:
+        # ── Tier 2: Risk warnings (non-filesystem) ─────────────────
+        seg_warnings = identify_risks(seg_tokens)
+        all_warnings.extend(seg_warnings)
+
+        # ── Tier 1: Filesystem destruction ─────────────────────────
+        action = identify_destructive(seg_tokens)
+        if action is None:
+            continue
+
+        all_actions.append(action)
+
+        # No targets → refuse.
+        if not action.targets:
+            all_refusals.append((
+                Refusal(
                     rule="no-targets",
                     reason=(
                         f"destructive command '{action.command}' has no "
@@ -98,48 +125,41 @@ def check_command(
                     raw=command,
                 ),
                 command,
-            )],
-            command=command,
-            action=action,
-        )
-
-    # ── Step 3-6: Resolve and check each target ─────────────────────
-    refusals: list[tuple[Refusal, str]] = []
-
-    for raw_target in action.targets:
-        result = resolve_target(raw_target, cwd=cwd, env=env)
-
-        if isinstance(result, Refusal):
-            refusals.append((result, raw_target))
+            ))
             continue
 
-        # Resolved — check each path.
-        for path in result.paths:
-            # Floor check (unoverridable).
-            if is_floor(path, home=env.get("HOME", "")):
-                refusals.append((floor_refusal(path, raw_target), raw_target))
+        # Check each target.
+        for raw_target in action.targets:
+            result = resolve_target(raw_target, cwd=cwd, env=env)
+
+            if isinstance(result, Refusal):
+                all_refusals.append((result, raw_target))
                 continue
 
-            # Scope check.
-            if not scope.allows(path):
-                refusals.append((scope.refusal(path, raw_target), raw_target))
-                continue
+            for path in result.paths:
+                if is_floor(path, home=env.get("HOME", "")):
+                    all_refusals.append((floor_refusal(path, raw_target), raw_target))
+                    continue
+                if not scope.allows(path):
+                    all_refusals.append((scope.refusal(path, raw_target), raw_target))
+                    continue
 
-        # Glob breadth check — only for glob-expanded targets.
-        if result.was_glob:
-            breadth_refusal = check_glob_breadth(
-                result,
-                max_entries=max_glob_breadth,
-                repo_root=scope.repo_root,
-            )
-            if breadth_refusal:
-                refusals.append((breadth_refusal, raw_target))
+            if result.was_glob:
+                breadth_refusal = check_glob_breadth(
+                    result,
+                    max_entries=max_glob_breadth,
+                    repo_root=scope.repo_root,
+                )
+                if breadth_refusal:
+                    all_refusals.append((breadth_refusal, raw_target))
 
     return CheckResult(
-        allowed=len(refusals) == 0,
-        refusals=refusals,
+        allowed=len(all_refusals) == 0,
+        refusals=all_refusals,
+        warnings=all_warnings,
         command=command,
-        action=action,
+        actions=all_actions,
+        segments_checked=len(segments),
     )
 
 

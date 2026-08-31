@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>blastradius — Blast-Radius Validation Report</title>
+<style>
+:root {
+  --bg:#08090C; --panel:#11141B; --line:#242A36;
+  --ink:#E9EDF3; --dim:#78849A; --dimmer:#4A5364;
+  --seal:#E0A82E; --refuse:#E0514B; --bound:#3FA98A;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+  font-family:system-ui,sans-serif; font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased; }
+code { font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; }
+.wrap { max-width:1100px; margin:0 auto; padding:30px 22px 80px; }
+h1 { font-size:28px; font-weight:800; letter-spacing:-.02em; margin:0 0 8px; }
+h1 em { font-style:normal; color:var(--seal); }
+.lede { color:var(--dim); max-width:70ch; margin-bottom:24px; }
+.metrics { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:12px; margin-bottom:30px; }
+.metric { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  padding:14px; }
+.metric .label { font-size:11px; color:var(--dim); text-transform:uppercase;
+  letter-spacing:.1em; margin-bottom:4px; }
+.metric .value { font-size:22px; font-weight:700; }
+.metric .value.good { color:var(--bound); }
+.metric .value.bad { color:var(--refuse); }
+.metric .value.warn { color:var(--seal); }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);
+  color:var(--dim); font-weight:600; text-transform:uppercase;
+  font-size:10px; letter-spacing:.1em; }
+td { padding:8px 10px; border-bottom:1px solid rgba(36,42,54,.5); }
+tr:hover { background:var(--panel); }
+.section { margin-top:30px; }
+.section h2 { font-size:18px; font-weight:700; margin-bottom:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Blast-Radius <em>Validation Report</em></h1>
+  <p class="lede">Scientific validation of software change blast-radius analysis.
+  22 regression cases and 10
+  control cases were run through the harness. Each experiment applies a code
+  mutation, runs baseline and changed versions against identical inputs, and
+  classifies the evidence into four levels: static suspicion, runtime reachable,
+  behavioural change, or failure propagation.</p>
+
+  <div class="metrics">
+    <div class="metric"><div class="label">Regression Cases</div><div class="value">22</div></div>
+    <div class="metric"><div class="label">Control Cases</div><div class="value">10</div></div>
+    <div class="metric"><div class="label">Detected</div><div class="value good">9</div></div>
+    <div class="metric"><div class="label">Missed</div><div class="value bad">13</div></div>
+    <div class="metric"><div class="label">False Positives</div><div class="value good">0</div></div>
+    <div class="metric"><div class="label">Precision</div><div class="value good">100.0%</div></div>
+    <div class="metric"><div class="label">Recall</div><div class="value warn">40.9%</div></div>
+    <div class="metric"><div class="label">Existing Test Rate</div><div class="value warn">40.9%</div></div>
+    <div class="metric"><div class="label">Blast-Radius Rate</div><div class="value good">40.9%</div></div>
+    <div class="metric"><div class="label">Additional Found</div><div class="value warn">0</div></div>
+    <div class="metric"><div class="label">Median Runtime</div><div class="value">0.00s</div></div>
+  </div>
+
+  <div class="section">
+    <h2>Experiment Results</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Experiment</th>
+          <th>Module</th>
+          <th>Evidence Level</th>
+          <th>Static Deps</th>
+          <th>Behavioural Changes</th>
+          <th>Tests Detect</th>
+          <th>Runtime</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+        <tr>
+          <td><code>H01-revert-quote-aware-tokeniser</code></td>
+          <td>tokenise</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>H02-revert-newline-refusal</code></td>
+          <td>tokenise</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>allowed, refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>H03-revert-double-dash</code></td>
+          <td>commands</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>H04-revert-no-targets-check</code></td>
+          <td>check</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>allowed, refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>H05-revert-execvp-handling</code></td>
+          <td>cli</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>H06-revert-double-star-root</code></td>
+          <td>rules</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>allowed, refusal_rules, refusal_reasons, refusal_resolved, allowed, refusal_rules, refusal_reasons, refusal_resolved, allowed, refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>H07-revert-line-continuation</code></td>
+          <td>tokenise</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S01-break-empty-var-detection</code></td>
+          <td>resolve</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>refusal_rules, refusal_reasons</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S02-break-tilde-refusal</code></td>
+          <td>resolve</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S03-break-glob-no-match</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S04-break-scope-deny</code></td>
+          <td>rules</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S05-break-find-delete</code></td>
+          <td>commands</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>allowed, refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S06-break-git-clean</code></td>
+          <td>commands</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>allowed, refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S07-break-truncate</code></td>
+          <td>commands</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S08-break-dd</code></td>
+          <td>commands</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S09-remove-etc-from-floor</code></td>
+          <td>rules</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S10-break-depth-check</code></td>
+          <td>rules</td>
+          <td style="color:#E0514B;font-weight:600">FAILURE_PROPAGATION</td>
+          <td>0</td>
+          <td>allowed, refusal_rules, refusal_reasons, refusal_resolved, allowed, refusal_rules, refusal_reasons, refusal_resolved</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S11-break-symlink-resolution</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S12-break-backtick-refusal</code></td>
+          <td>tokenise</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S13-break-cmd-subst-refusal</code></td>
+          <td>tokenise</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S14-break-pipe-refusal</code></td>
+          <td>tokenise</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#3FA98A;font-weight:700;text-align:center">✓</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>S15-disable-breadth-check</code></td>
+          <td>rules</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C01-add-comment-rules</code></td>
+          <td>rules</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C02-rename-local-var</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C03-change-report-format</code></td>
+          <td>report</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C04-add-unused-function</code></td>
+          <td>commands</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C05-change-docstring</code></td>
+          <td>check</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C06-reorder-imports</code></td>
+          <td>check</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C07-change-constant-name</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C08-add-type-annotation</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C09-change-whitespace</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+
+        <tr>
+          <td><code>C10-add-future-import</code></td>
+          <td>resolve</td>
+          <td style="color:#3FA98A;font-weight:600">RUNTIME_REACHABLE</td>
+          <td>0</td>
+          <td>—</td>
+          <td style="color:#E0514B;font-weight:700;text-align:center">✗</td>
+          <td style="text-align:right">0.00s</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Methodology</h2>
+    <p style="color:var(--dim);max-width:80ch">
+      Each experiment applies a targeted code mutation to one module, then runs
+      identical inputs against the baseline and changed versions. The harness
+      compares return values, exceptions, refusal rules, refusal reasons, and
+      resolved paths. Evidence is classified into four levels:
+      <strong style="color:var(--dimmer)">STATIC_SUSPICION</strong> (module is
+      imported but no runtime path proven),
+      <strong style="color:var(--bound)">RUNTIME_REACHABLE</strong> (code ran,
+      no behavioural change),
+      <strong style="color:var(--seal)">BEHAVIOURAL_CHANGE</strong> (output
+      differs but decision unchanged), and
+      <strong style="color:var(--refuse)">FAILURE_PROPAGATION</strong> (decision
+      changed, CLI exit code or hook block affected). The existing test suite is
+      run against each mutation to determine whether it would have caught the
+      regression. Where evidence is unavailable, UNKNOWN is returned.
+    </p>
+  </div>
+</div>
+</body>
+</html>

@@ -1,23 +1,22 @@
-"""Format refusals for terminal output.
+"""Format refusals and warnings for terminal output.
 
-Matches the format specified in the design brief:
+v0.3.0: Three output modes:
 
-    blastradius  BLOCKED
+  1. BLOCK — a filesystem-destruction target was refused. Prints the
+     full refusal block (same format as before).
 
-      command   rm -rf "$AGENT_TMP/session-$SID"
-      resolved  /
+  2. WARN — the command was allowed but contains consequential
+     non-filesystem actions. Prints a yellow warning block listing
+     each risk category.
 
-      reason    AGENT_TMP is unset — expansion produced an empty string
-                SID is unset
-                target resolved to filesystem root
-
-      rule      empty-variable-expansion (cannot be overridden)
-
-      If this is intentional, run it yourself outside the agent.
+  3. ALLOWED — the command was allowed with no warnings. Prints a
+     one-line summary so the developer knows the check ran and what
+     scope it covered. Silence is never the output.
 """
 
 from __future__ import annotations
 
+from .commands import RiskWarning
 from .resolve import Refusal
 
 
@@ -31,7 +30,7 @@ _UNOVERRIDABLE = {
 
 
 def format_refusal(refusal: Refusal, *, command: str) -> str:
-    """Format a refusal for terminal output."""
+    """Format a single refusal for terminal output."""
     lines: list[str] = []
     lines.append("blastradius  BLOCKED")
     lines.append("")
@@ -57,17 +56,13 @@ def format_refusal(refusal: Refusal, *, command: str) -> str:
 
 
 def format_multi_refusal(refusals: list[tuple[Refusal, str]], *, command: str) -> str:
-    """Format multiple refusals (one per target) for terminal output.
-
-    Shows the first refusal in detail, then summarises the rest.
-    """
+    """Format multiple refusals for terminal output."""
     if not refusals:
         return ""
 
     if len(refusals) == 1:
         return format_refusal(refusals[0][0], command=command)
 
-    # Multiple refusals — show the command, then each target's refusal.
     lines: list[str] = []
     lines.append("blastradius  BLOCKED")
     lines.append("")
@@ -91,4 +86,57 @@ def format_multi_refusal(refusals: list[tuple[Refusal, str]], *, command: str) -
     return "\n".join(lines)
 
 
-__all__ = ["format_refusal", "format_multi_refusal"]
+def format_warnings(warnings: list[RiskWarning], *, command: str) -> str:
+    """Format risk warnings for terminal output.
+
+    Warnings are printed when the command is allowed but contains
+    consequential non-filesystem actions.
+    """
+    if not warnings:
+        return ""
+
+    lines: list[str] = []
+    lines.append("blastradius  WARNING")
+    lines.append("")
+    lines.append(f"  command   {command}")
+    lines.append("")
+
+    # Deduplicate by category+reason.
+    seen = set()
+    unique: list[RiskWarning] = []
+    for w in warnings:
+        key = (w.category, w.reason)
+        if key not in seen:
+            seen.add(key)
+            unique.append(w)
+
+    for w in unique:
+        sev_marker = "⚠" if w.severity == "high" else "·"
+        lines.append(f"  {sev_marker} [{w.category}] {w.reason}")
+    lines.append("")
+    lines.append("  blastradius checked filesystem-destruction targets only.")
+    lines.append("  The warnings above are informational — the command was not blocked.")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_allowed(*, command: str, warnings: list[RiskWarning]) -> str:
+    """Format the ALLOWED summary.
+
+    If there are warnings, formats a WARNING block.
+    If there are no warnings, formats a one-line ALLOWED summary.
+    """
+    if warnings:
+        return format_warnings(warnings, command=command)
+
+    # No warnings — one-line summary.
+    return f"blastradius  ALLOWED (filesystem-destruction check only)\n  command   {command}\n"
+
+
+__all__ = [
+    "format_refusal",
+    "format_multi_refusal",
+    "format_warnings",
+    "format_allowed",
+]

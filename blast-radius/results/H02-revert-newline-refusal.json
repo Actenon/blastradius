@@ -1,0 +1,148 @@
+{
+  "name": "H02-revert-newline-refusal",
+  "module": "tokenise",
+  "category": "regression",
+  "static_dependents": [],
+  "static_suspicion_count": 0,
+  "behavioural_changes": [
+    {
+      "input_index": 5,
+      "field": "allowed",
+      "baseline": false,
+      "changed": true
+    },
+    {
+      "input_index": 5,
+      "field": "refusal_rules",
+      "baseline": [
+        "unparseable-command-newline"
+      ],
+      "changed": []
+    },
+    {
+      "input_index": 5,
+      "field": "refusal_reasons",
+      "baseline": [
+        "command contains a newline \u2014 blastradius treats newlines as command separators (same threat as ;). If this is intentional, run the commands separately outside the agent."
+      ],
+      "changed": []
+    },
+    {
+      "input_index": 5,
+      "field": "refusal_resolved",
+      "baseline": [
+        null
+      ],
+      "changed": []
+    }
+  ],
+  "has_failure_propagation": true,
+  "evidence_level": "FAILURE_PROPAGATION",
+  "existing_test_detection": true,
+  "runtime_reachable": {
+    "total_functions": 3,
+    "reachable_functions": 1,
+    "untested_reachable": 2
+  },
+  "elapsed_seconds": 0.0,
+  "baseline_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ],
+  "changed_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ]
+}

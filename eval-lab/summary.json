@@ -1,0 +1,14 @@
+{
+  "total_tasks": 30,
+  "low_risk": 10,
+  "medium_risk": 10,
+  "high_risk": 10,
+  "decision_changed_pct": 3.3,
+  "consequential_actions_surfaced": 4,
+  "consequential_actions_missed": 0,
+  "false_alarm_rate_on_harmless": 0.0,
+  "scope_expansion_total": 7,
+  "scope_expansion_detected": 3,
+  "scope_expansion_detection_rate": 42.9,
+  "mean_utility_score": 0.9
+}

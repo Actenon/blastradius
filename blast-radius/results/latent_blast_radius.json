@@ -1,0 +1,43 @@
+{
+  "total_reachable": 182,
+  "total_tested": 48,
+  "total_untested": 134,
+  "per_module": {
+    "tokenise": {
+      "reachable": 18,
+      "tested": 6,
+      "untested": 12
+    },
+    "commands": {
+      "reachable": 12,
+      "tested": 12,
+      "untested": 0
+    },
+    "check": {
+      "reachable": 6,
+      "tested": 3,
+      "untested": 3
+    },
+    "cli": {
+      "reachable": 6,
+      "tested": 0,
+      "untested": 6
+    },
+    "rules": {
+      "reachable": 66,
+      "tested": 0,
+      "untested": 66
+    },
+    "resolve": {
+      "reachable": 72,
+      "tested": 27,
+      "untested": 45
+    },
+    "report": {
+      "reachable": 2,
+      "tested": 0,
+      "untested": 2
+    }
+  },
+  "description": "134 production-reachable code paths are not exercised by any test input. These are latent blast-radius paths \u2014 a change to them would propagate at runtime but CI would not detect it."
+}

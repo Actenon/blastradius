@@ -1,0 +1,148 @@
+{
+  "name": "S02-break-tilde-refusal",
+  "module": "resolve",
+  "category": "regression",
+  "static_dependents": [],
+  "static_suspicion_count": 0,
+  "behavioural_changes": [
+    {
+      "input_index": 2,
+      "field": "refusal_rules",
+      "baseline": [
+        "tilde-ambiguous"
+      ],
+      "changed": [
+        "out-of-scope"
+      ]
+    },
+    {
+      "input_index": 2,
+      "field": "refusal_reasons",
+      "baseline": [
+        "target starts with ~ \u2014 tilde is ambiguous (could be $HOME or a file literally named ~). Use an explicit absolute path."
+      ],
+      "changed": [
+        "target /tmp/~/foo is not within any allowed scope entry"
+      ]
+    },
+    {
+      "input_index": 2,
+      "field": "refusal_resolved",
+      "baseline": [
+        "~/foo"
+      ],
+      "changed": [
+        "/tmp/~/foo"
+      ]
+    }
+  ],
+  "has_failure_propagation": true,
+  "evidence_level": "FAILURE_PROPAGATION",
+  "existing_test_detection": true,
+  "runtime_reachable": {
+    "total_functions": 8,
+    "reachable_functions": 3,
+    "untested_reachable": 5
+  },
+  "elapsed_seconds": 0.0,
+  "baseline_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ],
+  "changed_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ]
+}

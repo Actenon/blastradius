@@ -45,52 +45,58 @@ from blastradius.tokenise import tokenise
 class TestBug1QuotedMetacharacters:
     """The tokeniser must not refuse ; | && inside quotes.
 
-    Before the fix, the refusal regex ran on the raw command string,
-    so `rm -rf "foo;bar"` was refused as a command separator. This
-    caused false positives on any filename containing ;, |, &&.
+    v0.3.0: &&, ||, ;, | are now SPLIT into segments rather than
+    refused. Quoted versions are still treated as literals.
     """
 
-    def test_quoted_semicolon_not_refused(self):
+    def test_quoted_semicolon_not_split(self):
         """rm -rf "foo;bar" — semicolon inside quotes is a literal."""
         result = tokenise('rm -rf "foo;bar"')
-        assert result.tokens is not None
-        assert "foo;bar" in result.tokens
+        assert result.segments is not None
+        assert len(result.segments) == 1  # one segment, not split
+        assert "foo;bar" in result.segments[0]
 
-    def test_quoted_pipe_not_refused(self):
+    def test_quoted_pipe_not_split(self):
         """rm -rf "foo|bar" — pipe inside quotes is a literal."""
         result = tokenise('rm -rf "foo|bar"')
-        assert result.tokens is not None
-        assert "foo|bar" in result.tokens
+        assert result.segments is not None
+        assert len(result.segments) == 1
+        assert "foo|bar" in result.segments[0]
 
-    def test_quoted_logical_and_not_refused(self):
+    def test_quoted_logical_and_not_split(self):
         """rm -rf "foo&&bar" — && inside quotes is a literal."""
         result = tokenise('rm -rf "foo&&bar"')
-        assert result.tokens is not None
-        assert "foo&&bar" in result.tokens
+        assert result.segments is not None
+        assert len(result.segments) == 1
+        assert "foo&&bar" in result.segments[0]
 
-    def test_single_quoted_semicolon_not_refused(self):
+    def test_single_quoted_semicolon_not_split(self):
         """rm -rf 'foo;bar' — single quotes too."""
         result = tokenise("rm -rf 'foo;bar'")
-        assert result.tokens is not None
-        assert "foo;bar" in result.tokens
+        assert result.segments is not None
+        assert len(result.segments) == 1
+        assert "foo;bar" in result.segments[0]
 
-    def test_unquoted_semicolon_still_refused(self):
-        """rm -rf foo;bar — unquoted semicolon IS refused."""
+    def test_unquoted_semicolon_splits(self):
+        """rm -rf foo;bar — unquoted semolon SPLITS into two segments."""
         result = tokenise("rm -rf foo;bar")
-        assert result.refusal is not None
-        assert "semicolon" in result.refusal.rule
+        assert result.segments is not None
+        assert len(result.segments) == 2
+        assert result.separators == [";"]
 
-    def test_unquoted_pipe_still_refused(self):
-        """rm -rf foo|bar — unquoted pipe IS refused."""
+    def test_unquoted_pipe_splits(self):
+        """rm -rf foo|bar — unquoted pipe SPLITS into two segments."""
         result = tokenise("rm -rf foo|bar")
-        assert result.refusal is not None
-        assert "pipe" in result.refusal.rule
+        assert result.segments is not None
+        assert len(result.segments) == 2
+        assert result.separators == ["|"]
 
-    def test_escaped_semicolon_not_refused(self):
+    def test_escaped_semicolon_not_split(self):
         """rm -rf foo\\;bar — backslash-escaped semicolon is a literal."""
         result = tokenise(r"rm -rf foo\;bar")
-        assert result.tokens is not None
-        assert "foo;bar" in result.tokens
+        assert result.segments is not None
+        assert len(result.segments) == 1
+        assert "foo;bar" in result.segments[0]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -137,8 +143,8 @@ class TestBug2NewlineBypass:
         # The newline is inside double quotes — it's a literal.
         # This should NOT be refused.
         assert result.refusal is None
-        assert result.tokens is not None
-        assert "foo\nbar" in result.tokens
+        assert result.segments is not None
+        assert "foo\nbar" in result.segments[0]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -154,15 +160,15 @@ class TestBug3LineContinuation:
     def test_line_continuation_removed(self):
         """rm -rf /tmp/foo\\<newline>bar → rm -rf /tmp/foobar"""
         result = tokenise("rm -rf /tmp/foo\\\nbar")
-        assert result.tokens is not None
+        assert result.segments is not None
         # The backslash-newline is removed, joining foo and bar.
-        assert "/tmp/foobar" in result.tokens
+        assert "/tmp/foobar" in result.segments[0]
 
     def test_line_continuation_in_double_quotes(self):
         """Inside double quotes, \\<newline> is also a line continuation."""
         result = tokenise('rm -rf "foo\\\nbar"')
-        assert result.tokens is not None
-        assert "foobar" in result.tokens
+        assert result.segments is not None
+        assert "foobar" in result.segments[0]
 
 
 # ─────────────────────────────────────────────────────────────────────

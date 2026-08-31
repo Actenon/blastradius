@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 from .check import check_command
-from .report import format_multi_refusal, format_refusal
+from .report import format_allowed, format_multi_refusal, format_refusal, format_warnings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,16 +69,22 @@ def _cmd_wrapper(command_args: list[str]) -> int:
         print("blastradius: no command given after --", file=sys.stderr)
         return 2
 
-    # Reconstruct the command string. We join with spaces, but this
-    # is only for display — the tokeniser re-parses it.
+    # Reconstruct the command string.
     command = " ".join(command_args)
 
     result = check_command(command)
 
+    # ── Print warnings (if any) before deciding ────────────────────
+    if result.has_warnings:
+        print(format_warnings(result.warnings, command=command), file=sys.stderr)
+
     if result.allowed:
-        # Exec the command. blastradius is replaced by the target process.
-        # We use os.execvp so the command's stdout/stderr go directly
-        # to the terminal, and its exit code becomes the process exit code.
+        # Print the ALLOWED summary (one line, no warnings case).
+        if not result.has_warnings:
+            print(format_allowed(command=command, warnings=result.warnings),
+                  file=sys.stderr)
+
+        # Exec the command.
         try:
             os.execvp(command_args[0], command_args)
         except FileNotFoundError:
@@ -93,7 +99,6 @@ def _cmd_wrapper(command_args: list[str]) -> int:
                 file=sys.stderr,
             )
             return 126
-        # execvp doesn't return on success.
         return 0  # unreachable
 
     # Refused — print the refusal and exit non-zero.
@@ -150,7 +155,14 @@ def _cmd_hook(_args: list[str]) -> int:
     result = check_command(command)
 
     if result.allowed:
-        # Allow — output nothing (or an empty allow decision).
+        # Allow — but if there are warnings, surface them as a
+        # non-blocking hook decision so the developer sees them.
+        if result.has_warnings:
+            warning_text = format_warnings(result.warnings, command=command)
+            print(json.dumps({
+                "decision": "allow",
+                "reason": warning_text,
+            }))
         return 0
 
     # Block — output the decision JSON.

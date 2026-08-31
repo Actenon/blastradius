@@ -1,0 +1,13 @@
+{
+  "regression_cases": 22,
+  "control_cases": 10,
+  "detected_regressions": 9,
+  "missed_regressions": 13,
+  "false_positives": 0,
+  "precision": 1.0,
+  "recall": 0.4091,
+  "existing_test_detection_rate": 0.4091,
+  "blast_radius_detection_rate": 0.4091,
+  "additional_regressions_found": 0,
+  "median_runtime_seconds": 0.0
+}

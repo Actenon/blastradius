@@ -1,51 +1,62 @@
-"""Identify destructive commands and extract their target arguments.
+"""Identify destructive and risky commands, and extract their targets.
 
-Not just rm. The corpus of ways to destroy data:
+v0.3.0: Two tiers of detection:
 
-  - rm, rmdir, shred, srm
-  - find ... -delete and find ... -exec rm
-  - git clean -fdx
-  - dd of=<path>
-  - truncate -s 0 <path>
-  - mv <path> /dev/null
-  - > file (output redirection that truncates)
-  - chmod -R / chown -R (destructive in practice)
+  TIER 1 — BLOCK (filesystem destruction, same as before):
+    rm, rmdir, shred, srm, truncate, dd
+    find -delete, find -exec rm
+    git clean -f, git reset --hard
 
-v1 starts with: rm, find -delete, git clean, dd, truncate, shred.
-Everything else is a later addition.
+  TIER 2 — WARN (consequential but not filesystem destruction):
+    pip install / pip3 install (arbitrary code execution)
+    npm install / yarn install (arbitrary code execution)
+    curl / wget (network request, potential credential exfiltration)
+    git filter-branch / git push --force (irreversible git operations)
+    chmod -R / chown -R (recursive permission changes)
+    twine upload (irreversible PyPI publish)
+    ssh / scp / rsync (remote system access)
+    docker run (container with potential host mounts)
+    .env / secrets file access (config/credential exposure)
+    production deployment indicators (deploy.sh, production, staging→prod)
+
+Tier 2 commands are not blocked by default — they produce a WARNING
+that tells the developer what kind of risk is present. The developer
+decides whether to proceed.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
-# Commands that are always destructive when they appear.
-DESTRUCTIVE_COMMANDS: set[str] = {
-    "rm",
-    "rmdir",
-    "shred",
-    "srm",
-    "truncate",
-    "dd",
-}
-
-# Commands that are destructive only with specific flags.
-# find -delete, find -exec rm, git clean -fdx, etc.
-CONDITIONAL_COMMANDS: set[str] = {
-    "find",
-    "git",
-}
+# ─────────────────────────────────────────────────────────────────────
+# Tier 1: Filesystem destruction (BLOCK)
+# ─────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class DestructiveAction:
-    """A detected destructive operation within a command."""
+    """A detected destructive filesystem operation."""
 
-    command: str  # e.g. "rm", "find", "git"
-    targets: list[str]  # raw target argument strings
-    flags: list[str]  # flags passed to the command
-    source: str  # human-readable description of what's destructive
+    command: str
+    targets: list[str]
+    flags: list[str]
+    source: str
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Tier 2: Risky but not filesystem-destruction (WARN)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RiskWarning:
+    """A warning about a consequential but non-filesystem-destruction action."""
+
+    category: str  # "network", "package", "git", "permission", "publish", "config", "deployment"
+    command: str
+    reason: str
+    severity: str  # "high", "medium"
 
 
 # Find flags that take an argument (the next token is NOT a search path).
@@ -58,12 +69,7 @@ _FIND_FLAGS_WITH_ARG: set[str] = {
 
 
 def _find_search_paths(args: list[str]) -> list[str]:
-    """Extract search paths from find arguments.
-
-    The search path is the first non-flag argument that isn't an
-    argument to a find flag like -name, -type, etc.
-    If no path is given, find defaults to "." (CWD).
-    """
+    """Extract search paths from find arguments."""
     targets: list[str] = []
     skip_next = False
     for a in args:
@@ -75,67 +81,52 @@ def _find_search_paths(args: list[str]) -> list[str]:
             continue
         if a.startswith("-"):
             continue
-        # This is a search path (or an argument to -exec, but -exec
-        # is handled separately by the caller).
         targets.append(a)
     if not targets:
         targets = ["."]
     return targets
 
 
-def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
-    """Check if a tokenised command is destructive.
-
-    Returns a DestructiveAction if destructive, None if not.
-
-    tokens is the output of the tokeniser: ["rm", "-rf", "/tmp/foo"].
-
-    Handles ``--`` (end-of-flags separator): after ``--``, every
-    argument is a target, even if it starts with ``-``. This matters
-    for files named like ``-foo`` or ``-rf`` that would otherwise be
-    misclassified as flags.
-    """
-    if not tokens:
-        return None
-
-    cmd = tokens[0]
-
-    # Strip leading command paths: /bin/rm → rm
+def _strip_path(cmd: str) -> str:
+    """Strip leading command paths: /bin/rm → rm"""
     if "/" in cmd:
         cmd = cmd.rsplit("/", 1)[-1]
     if "\\" in cmd:
         cmd = cmd.rsplit("\\", 1)[-1]
+    return cmd
 
-    args = tokens[1:]
 
-    # ── Parse flags and targets, respecting -- ──────────────────────
-    # After --, every remaining argument is a target, even if it
-    # starts with -. This matches bash semantics.
+def _parse_flags_targets(args: list[str]) -> tuple[list[str], list[str]]:
+    """Parse args into (flags, non_flags) respecting -- separator."""
     flags: list[str] = []
     non_flags: list[str] = []
-    seen_double_dash = False
+    seen_dd = False
     for a in args:
-        if seen_double_dash:
+        if seen_dd:
             non_flags.append(a)
         elif a == "--":
-            seen_double_dash = True
+            seen_dd = True
         elif a.startswith("-") and a != "-":
             flags.append(a)
         else:
             non_flags.append(a)
+    return flags, non_flags
+
+
+def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
+    """Check if a tokenised command is a filesystem-destruction command.
+
+    Returns a DestructiveAction if destructive, None if not.
+    """
+    if not tokens:
+        return None
+
+    cmd = _strip_path(tokens[0])
+    args = tokens[1:]
+    flags, non_flags = _parse_flags_targets(args)
 
     # ── rm, rmdir, shred, srm ───────────────────────────────────────
     if cmd in ("rm", "rmdir", "shred", "srm"):
-        # BUG 5 fix: refuse destructive commands with zero targets.
-        # An rm with no targets is suspicious — the intent is unclear
-        # and it may be a misparsed command.
-        if not non_flags:
-            return DestructiveAction(
-                command=cmd,
-                targets=[],
-                flags=flags,
-                source=f"{cmd} — direct filesystem deletion (no targets given)",
-            )
         return DestructiveAction(
             command=cmd,
             targets=non_flags,
@@ -145,10 +136,7 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
 
     # ── truncate ─────────────────────────────────────────────────────
     if cmd == "truncate":
-        # truncate -s 0 <file>  or  truncate --size 0 <file>
-        # The -s flag takes an argument (the size), which is NOT a target.
         if "-s" in flags or "--size" in " ".join(flags):
-            # Re-parse: skip the argument to -s/--size.
             targets = []
             skip_next = False
             seen_dd = False
@@ -183,24 +171,16 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
                 targets.append(a)
             if targets:
                 return DestructiveAction(
-                    command=cmd,
-                    targets=targets,
-                    flags=flags,
+                    command=cmd, targets=targets, flags=flags,
                     source="truncate — truncates file to zero or specified size",
                 )
 
     # ── dd ───────────────────────────────────────────────────────────
     if cmd == "dd":
-        # dd of=<path> — the of= argument is the target.
-        targets = []
-        for a in args:
-            if a.startswith("of="):
-                targets.append(a[3:])
+        targets = [a[3:] for a in args if a.startswith("of=")]
         if targets:
             return DestructiveAction(
-                command=cmd,
-                targets=targets,
-                flags=flags,
+                command=cmd, targets=targets, flags=flags,
                 source="dd — writes to of= target, overwriting existing data",
             )
 
@@ -208,32 +188,25 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
     if cmd == "find":
         if "-delete" in args:
             return DestructiveAction(
-                command=cmd,
-                targets=_find_search_paths(args),
-                flags=flags,
+                command=cmd, targets=_find_search_paths(args), flags=flags,
                 source="find -delete — deletes matched files",
             )
-        # find ... -exec rm
         if "-exec" in args:
             exec_idx = args.index("-exec")
             exec_cmd = args[exec_idx + 1] if exec_idx + 1 < len(args) else ""
             if exec_cmd in ("rm", "rmdir", "shred") or exec_cmd.endswith("/rm"):
                 return DestructiveAction(
-                    command=cmd,
-                    targets=_find_search_paths(args),
-                    flags=flags,
+                    command=cmd, targets=_find_search_paths(args), flags=flags,
                     source=f"find -exec {exec_cmd} — deletes matched files",
                 )
 
-    # ── git clean -fdx ───────────────────────────────────────────────
+    # ── git clean -f ─────────────────────────────────────────────────
     if cmd == "git" and len(args) >= 1 and args[0] == "clean":
         if "-f" in " ".join(flags) or "--force" in " ".join(flags):
             targets = non_flags[1:] if len(non_flags) > 1 else ["."]
             return DestructiveAction(
-                command=cmd,
-                targets=targets,
-                flags=flags,
-                source="git clean -f — removes untracked files",
+                command=cmd, targets=targets, flags=flags,
+                source="git clean -f — removes untracked files (including .env, secrets)",
             )
 
     # ── git reset --hard ─────────────────────────────────────────────
@@ -241,18 +214,224 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
         if "--hard" in args:
             targets = non_flags[1:] if len(non_flags) > 1 else ["."]
             return DestructiveAction(
-                command=cmd,
-                targets=targets,
-                flags=flags,
+                command=cmd, targets=targets, flags=flags,
                 source="git reset --hard — discards working tree changes",
             )
 
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Tier 2: Risk warnings
+# ─────────────────────────────────────────────────────────────────────
+
+
+def identify_risks(tokens: list[str]) -> list[RiskWarning]:
+    """Identify non-filesystem risks in a command.
+
+    Returns a list of RiskWarning objects. These are NOT blocks —
+    they are warnings that surface consequential actions the developer
+    should be aware of.
+    """
+    if not tokens:
+        return []
+
+    cmd = _strip_path(tokens[0])
+    args = tokens[1:]
+    flags, non_flags = _parse_flags_targets(args)
+    full_cmd = " ".join(tokens)
+    warnings: list[RiskWarning] = []
+
+    # ── Package installation (arbitrary code execution) ────────────
+    if cmd in ("pip", "pip3", "python3", "python") and "install" in args:
+        # python -m pip install, pip install, etc.
+        if cmd in ("python", "python3") and "-m" in args:
+            # python -m pip install foo
+            try:
+                m_idx = args.index("-m")
+                if m_idx + 1 < len(args) and args[m_idx + 1] in ("pip", "pip3"):
+                    if "install" in args[m_idx + 2:]:
+                        warnings.append(RiskWarning(
+                            category="package",
+                            command=full_cmd,
+                            reason="pip install executes setup.py from the package — "
+                                   "arbitrary code runs on your machine",
+                            severity="high",
+                        ))
+            except (ValueError, IndexError):
+                pass
+        elif cmd in ("pip", "pip3"):
+            warnings.append(RiskWarning(
+                category="package",
+                command=full_cmd,
+                reason="pip install executes setup.py from the package — "
+                       "arbitrary code runs on your machine",
+                severity="high",
+            ))
+
+    if cmd in ("npm", "yarn", "pnpm") and "install" in args:
+        warnings.append(RiskWarning(
+            category="package",
+            command=full_cmd,
+            reason=f"{cmd} install runs postinstall scripts — "
+                   "arbitrary code executes on your machine",
+            severity="high",
+        ))
+
+    if cmd == "cargo" and "install" in args:
+        warnings.append(RiskWarning(
+            category="package",
+            command=full_cmd,
+            reason="cargo install runs build scripts — arbitrary code execution",
+            severity="high",
+        ))
+
+    # ── Network requests (potential credential exfiltration) ───────
+    if cmd in ("curl", "wget"):
+        # Check for credential/header flags
+        has_cred = any(
+            a.startswith("-H") or a.startswith("--header")
+            or "Authorization" in a or "Bearer" in a or "token" in a.lower()
+            for a in args
+        )
+        # Check for $VAR patterns that might be secrets
+        has_var = any("$" in a for a in args)
+        if has_cred or has_var:
+            warnings.append(RiskWarning(
+                category="network",
+                command=full_cmd,
+                reason="network request with potential credentials — "
+                       "data exfiltration risk. blastradius cannot inspect "
+                       "what data is sent or where it goes",
+                severity="high",
+            ))
+        else:
+            warnings.append(RiskWarning(
+                category="network",
+                command=full_cmd,
+                reason="network request — blastradius cannot inspect "
+                       "what data is sent or where it goes",
+                severity="medium",
+            ))
+
+    # ── Irreversible git operations ────────────────────────────────
+    if cmd == "git":
+        if "filter-branch" in args:
+            warnings.append(RiskWarning(
+                category="git",
+                command=full_cmd,
+                reason="git filter-branch rewrites history irreversibly — "
+                       "all collaborators must re-clone",
+                severity="high",
+            ))
+        if "push" in args and ("--force" in args or "-f" in flags):
+            warnings.append(RiskWarning(
+                category="git",
+                command=full_cmd,
+                reason="git push --force overwrites remote history — "
+                       "collaborators' branches may be destroyed",
+                severity="high",
+            ))
+        if "push" in args and not ("--force" in args or "-f" in flags):
+            warnings.append(RiskWarning(
+                category="git",
+                command=full_cmd,
+                reason="git push publishes commits to a remote — "
+                       "difficult to undo if sensitive data is included",
+                severity="medium",
+            ))
+
+    # ── Recursive permission changes ───────────────────────────────
+    if cmd in ("chmod", "chown") and "-R" in args:
+        target = non_flags[-1] if non_flags else "."
+        warnings.append(RiskWarning(
+            category="permission",
+            command=full_cmd,
+            reason=f"recursive {cmd} on {target} — changes permissions "
+                   f"on entire directory tree, potential security impact",
+            severity="high",
+        ))
+
+    # ── Irreversible publish ───────────────────────────────────────
+    if cmd == "twine" and "upload" in args:
+        warnings.append(RiskWarning(
+            category="publish",
+            command=full_cmd,
+            reason="twine upload publishes to PyPI — irreversible. "
+                   "Once published, the version name cannot be reused",
+            severity="high",
+        ))
+    if cmd in ("npm", "yarn") and "publish" in args:
+        warnings.append(RiskWarning(
+            category="publish",
+            command=full_cmd,
+            reason=f"{cmd} publish is irreversible — the version name "
+                   f"cannot be reused once published",
+            severity="high",
+        ))
+
+    # ── Config / secret file access ────────────────────────────────
+    config_indicators = [".env", "secrets", "credentials", "id_rsa",
+                         ".pem", ".key", "config.yml", "config.yaml",
+                         "settings.py"]
+    for indicator in config_indicators:
+        if indicator in full_cmd:
+            warnings.append(RiskWarning(
+                category="config",
+                command=full_cmd,
+                reason=f"command touches {indicator} — potential "
+                       f"credential or secret exposure",
+                severity="high",
+            ))
+            break  # one warning per command
+
+    # ── Deployment target indicators ───────────────────────────────
+    if "production" in full_cmd or "prod" in non_flags:
+        if any(kw in full_cmd for kw in ["deploy", "kubectl", "terraform",
+                                          "ansible", "helm", "docker"]):
+            warnings.append(RiskWarning(
+                category="deployment",
+                command=full_cmd,
+                reason="command targets production infrastructure — "
+                       "changes are live and may affect users",
+                severity="high",
+            ))
+    if "staging" in full_cmd and "production" in full_cmd:
+        warnings.append(RiskWarning(
+            category="deployment",
+            command=full_cmd,
+            reason="command changes staging to production — "
+                   "verify this is intentional",
+            severity="high",
+        ))
+
+    # ── Remote system access ───────────────────────────────────────
+    if cmd in ("ssh", "scp", "rsync"):
+        warnings.append(RiskWarning(
+            category="network",
+            command=full_cmd,
+            reason=f"{cmd} accesses a remote system — blastradius "
+                   f"cannot inspect what happens on the remote host",
+            severity="medium",
+        ))
+
+    # ── Docker with host mounts ────────────────────────────────────
+    if cmd == "docker" and "run" in args:
+        if "-v" in args or "--volume" in args:
+            warnings.append(RiskWarning(
+                category="deployment",
+                command=full_cmd,
+                reason="docker run with -v mounts host paths into the "
+                       "container — the container can modify host files",
+                severity="medium",
+            ))
+
+    return warnings
+
+
 __all__ = [
-    "DESTRUCTIVE_COMMANDS",
-    "CONDITIONAL_COMMANDS",
     "DestructiveAction",
+    "RiskWarning",
     "identify_destructive",
+    "identify_risks",
 ]

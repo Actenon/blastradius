@@ -1,0 +1,138 @@
+{
+  "name": "S01-break-empty-var-detection",
+  "module": "resolve",
+  "category": "regression",
+  "static_dependents": [],
+  "static_suspicion_count": 0,
+  "behavioural_changes": [
+    {
+      "input_index": 0,
+      "field": "refusal_rules",
+      "baseline": [
+        "empty-variable-expansion"
+      ],
+      "changed": [
+        "floor-path"
+      ]
+    },
+    {
+      "input_index": 0,
+      "field": "refusal_reasons",
+      "baseline": [
+        "UNSET_VAR is unset \u2014 expansion produced an empty string"
+      ],
+      "changed": [
+        "target /foo is a protected system path (root, home directory, or depth \u2264 1 from root) \u2014 this rule cannot be overridden by any configuration"
+      ]
+    }
+  ],
+  "has_failure_propagation": true,
+  "evidence_level": "FAILURE_PROPAGATION",
+  "existing_test_detection": true,
+  "runtime_reachable": {
+    "total_functions": 8,
+    "reachable_functions": 3,
+    "untested_reachable": 5
+  },
+  "elapsed_seconds": 0.0,
+  "baseline_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ],
+  "changed_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ]
+}

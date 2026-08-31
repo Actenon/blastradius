@@ -1,0 +1,117 @@
+{
+  "name": "S07-break-truncate",
+  "module": "commands",
+  "category": "regression",
+  "static_dependents": [],
+  "static_suspicion_count": 0,
+  "behavioural_changes": [],
+  "has_failure_propagation": false,
+  "evidence_level": "RUNTIME_REACHABLE",
+  "existing_test_detection": true,
+  "runtime_reachable": {
+    "total_functions": 2,
+    "reachable_functions": 2,
+    "untested_reachable": 0
+  },
+  "elapsed_seconds": 0.0,
+  "baseline_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ],
+  "changed_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ]
+}

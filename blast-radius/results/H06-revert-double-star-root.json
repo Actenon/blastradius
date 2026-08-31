@@ -1,0 +1,208 @@
+{
+  "name": "H06-revert-double-star-root",
+  "module": "rules",
+  "category": "regression",
+  "static_dependents": [],
+  "static_suspicion_count": 0,
+  "behavioural_changes": [
+    {
+      "input_index": 3,
+      "field": "allowed",
+      "baseline": true,
+      "changed": false
+    },
+    {
+      "input_index": 3,
+      "field": "refusal_rules",
+      "baseline": [],
+      "changed": [
+        "out-of-scope"
+      ]
+    },
+    {
+      "input_index": 3,
+      "field": "refusal_reasons",
+      "baseline": [],
+      "changed": [
+        "target /tmp/build is not within any allowed scope entry"
+      ]
+    },
+    {
+      "input_index": 3,
+      "field": "refusal_resolved",
+      "baseline": [],
+      "changed": [
+        "/tmp/build"
+      ]
+    },
+    {
+      "input_index": 4,
+      "field": "allowed",
+      "baseline": true,
+      "changed": false
+    },
+    {
+      "input_index": 4,
+      "field": "refusal_rules",
+      "baseline": [],
+      "changed": [
+        "out-of-scope"
+      ]
+    },
+    {
+      "input_index": 4,
+      "field": "refusal_reasons",
+      "baseline": [],
+      "changed": [
+        "target /tmp/foo;bar is not within any allowed scope entry"
+      ]
+    },
+    {
+      "input_index": 4,
+      "field": "refusal_resolved",
+      "baseline": [],
+      "changed": [
+        "/tmp/foo;bar"
+      ]
+    },
+    {
+      "input_index": 11,
+      "field": "allowed",
+      "baseline": true,
+      "changed": false
+    },
+    {
+      "input_index": 11,
+      "field": "refusal_rules",
+      "baseline": [],
+      "changed": [
+        "out-of-scope"
+      ]
+    },
+    {
+      "input_index": 11,
+      "field": "refusal_reasons",
+      "baseline": [],
+      "changed": [
+        "target /tmp/log is not within any allowed scope entry"
+      ]
+    },
+    {
+      "input_index": 11,
+      "field": "refusal_resolved",
+      "baseline": [],
+      "changed": [
+        "/tmp/log"
+      ]
+    }
+  ],
+  "has_failure_propagation": true,
+  "evidence_level": "FAILURE_PROPAGATION",
+  "existing_test_detection": true,
+  "runtime_reachable": {
+    "total_functions": 11,
+    "reachable_functions": 0,
+    "untested_reachable": 11
+  },
+  "elapsed_seconds": 0.0,
+  "baseline_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ],
+  "changed_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "name": "H03-revert-double-dash",
+  "module": "commands",
+  "category": "regression",
+  "static_dependents": [],
+  "static_suspicion_count": 0,
+  "behavioural_changes": [
+    {
+      "input_index": 7,
+      "field": "refusal_rules",
+      "baseline": [
+        "out-of-scope"
+      ],
+      "changed": [
+        "no-targets"
+      ]
+    },
+    {
+      "input_index": 7,
+      "field": "refusal_reasons",
+      "baseline": [
+        "target /tmp/-foo is not within any allowed scope entry"
+      ],
+      "changed": [
+        "destructive command 'rm' has no targets \u2014 intent is unclear, refusing to proceed"
+      ]
+    },
+    {
+      "input_index": 7,
+      "field": "refusal_resolved",
+      "baseline": [
+        "/tmp/-foo"
+      ],
+      "changed": [
+        null
+      ]
+    }
+  ],
+  "has_failure_propagation": true,
+  "evidence_level": "FAILURE_PROPAGATION",
+  "existing_test_detection": true,
+  "runtime_reachable": {
+    "total_functions": 2,
+    "reachable_functions": 2,
+    "untested_reachable": 0
+  },
+  "elapsed_seconds": 0.0,
+  "baseline_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ],
+  "changed_summary": [
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": false,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    },
+    {
+      "allowed": true,
+      "exception": null
+    }
+  ]
+}
