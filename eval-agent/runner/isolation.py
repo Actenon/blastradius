@@ -1,55 +1,38 @@
-"""Isolated execution environment using Linux namespaces.
-
-Since Docker is not available in this environment, we use `unshare` with
-mount namespaces for isolation. This provides:
-  - A private mount namespace (the agent can't see host filesystems)
-  - A fake $HOME (no real home directory)
-  - A restricted PATH with wrapper scripts for dangerous commands
-  - No network access (where the task doesn't require it)
-  - CPU/memory/time limits via `ulimit`
-
-The isolation is NOT as strong as a container, but it prevents:
-  - Writing outside the task workspace
-  - Accessing real $HOME or credentials
-  - Damaging system paths
-
-Commands like `rm -rf /` inside the namespace can only affect the
-namespace's filesystem view, not the host.
-"""
+"""Pre-execution BlastRadius checks with Docker-enforced isolation."""
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
-import sys
-import tempfile
-import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
+DEFAULT_IMAGE = (
+    "python@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
+)
+
+
 @dataclass
 class IsolationConfig:
-    """Configuration for an isolated execution environment."""
-    workspace: str  # The task workspace (repo copy)
-    fake_home: str = ""  # Fake $HOME directory
-    fake_creds: dict[str, str] = field(default_factory=dict)  # Fake credentials
+    workspace: str
     network_enabled: bool = False
     timeout_seconds: int = 120
-    memory_limit_mb: int = 512
-    cpu_limit_seconds: int = 60
+    memory_limit_mb: int = 256
+    cpu_limit: float = 1.0
+    pids_limit: int = 64
+    docker_path: str = "docker"
+    image: str = DEFAULT_IMAGE
 
 
 @dataclass
 class ExecutionResult:
-    """Result of executing a command in isolation."""
     command: str
     cwd: str
     attempted: bool = True
     executed: bool = False
-    exit_code: int = -1
+    exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
     effects: list[dict] = field(default_factory=list)
@@ -57,219 +40,198 @@ class ExecutionResult:
 
 
 class IsolatedExecutor:
-    """Executes commands in an isolated environment.
+    """Check a command, then run allowed commands in a locked-down container."""
 
-    The executor creates a restricted environment with:
-      - A PATH shim that intercepts dangerous commands through BlastRadius
-      - A fake $HOME with no real credentials
-      - A workspace directory that is the only writable area
-      - Network disabled by default
-
-    Every command is recorded in the action ledger with:
-      - attempted: True
-      - blastradius: {decision, reason, resolved_targets}
-      - executed: True/False
-      - exit_code: from execution
-      - effects: independently observed changes
-    """
+    mechanism = "Docker Engine/runc: mount, PID, network, IPC and UTS namespaces; seccomp"
 
     def __init__(self, config: IsolationConfig):
         self.config = config
+        self.workspace = Path(config.workspace).resolve(strict=True)
+        if not self.workspace.is_dir():
+            raise ValueError(f"workspace is not a directory: {self.workspace}")
         self.action_ledger: list[dict] = []
-        self._shim_dir: str | None = None
-        self._setup_shim()
 
-    def _setup_shim(self) -> None:
-        """Create a PATH shim directory with wrapper scripts.
+    def _container_cwd(self, cwd: str) -> str:
+        resolved = Path(cwd).resolve(strict=True)
+        try:
+            relative = resolved.relative_to(self.workspace)
+        except ValueError as exc:
+            raise ValueError(f"cwd must be inside workspace: {resolved}") from exc
+        if relative == Path("."):
+            return "/workspace"
+        return f"/workspace/{relative.as_posix()}"
 
-        The shim directory contains wrapper scripts for commands that
-        BlastRadius checks (rm, git, find, chmod, pip, curl, etc.).
-        Each wrapper:
-          1. Calls `blastradius check <command>` to get the decision
-          2. If REFUSE: records the attempt, prints the block, exits 1
-          3. If ALLOW/WARN: records the attempt, executes the real command
-        """
-        self._shim_dir = tempfile.mkdtemp(prefix="blast-shim-")
-
-        # Commands to wrap
-        wrapped_commands = [
-            "rm", "rmdir", "shred", "truncate", "dd",
-            "find", "git", "chmod", "chown",
-            "pip", "pip3", "npm", "yarn", "pnpm", "cargo",
-            "curl", "wget", "ssh", "scp", "rsync",
-            "twine", "docker", "kubectl", "terraform",
+    def isolation_command(self, command: str, cwd: str | None = None) -> list[str]:
+        """Return the exact argv used to start the isolated shell."""
+        host_cwd = str(Path(cwd or self.workspace).resolve(strict=True))
+        container_cwd = self._container_cwd(host_cwd)
+        mount = f"type=bind,source={self.workspace},target=/workspace"
+        return [
+            self.config.docker_path,
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--network",
+            "bridge" if self.config.network_enabled else "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,nodev,size=16m",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            str(self.config.pids_limit),
+            "--memory",
+            f"{self.config.memory_limit_mb}m",
+            "--cpus",
+            str(self.config.cpu_limit),
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--mount",
+            mount,
+            "--workdir",
+            container_cwd,
+            "--env",
+            "HOME=/nonexistent",
+            "--env",
+            "PATH=/usr/local/bin:/usr/bin:/bin",
+            self.config.image,
+            "/bin/sh",
+            "-c",
+            command,
         ]
 
-        for cmd in wrapped_commands:
-            shim_path = os.path.join(self._shim_dir, cmd)
-            shim_content = textwrap.dedent(f"""\
-                #!/bin/bash
-                # BlastRadius shim for {cmd}
-                # Intercepts the command, checks it through blastradius,
-                # then either blocks or executes the real binary.
+    @staticmethod
+    def _blast_result(command: str, cwd: str) -> tuple[str, str, list[str], str]:
+        from blastradius.check import check_command
 
-                # The full command (including this wrapper's args)
-                FULL_CMD="{cmd} $*"
+        result = check_command(command, cwd=cwd)
+        if result.blocked:
+            decision = "REFUSE"
+            tier = "deterministic"
+        elif result.has_warnings:
+            decision = "WARN"
+            tier = "heuristic"
+        else:
+            decision = "ALLOW"
+            tier = "deterministic"
 
-                # Find the real binary (skip the shim)
-                REAL_BIN=$(which -a {cmd} | grep -v "{self._shim_dir}" | head -1)
-                if [ -z "$REAL_BIN" ]; then
-                    REAL_BIN="/usr/bin/{cmd}"
-                fi
-
-                # Run through blastradius check
-                BR_OUTPUT=$(BLASTRADIUS_CHECK=1 {sys.executable} -m blastradius --quiet -- "$FULL_CMD" 2>&1)
-                BR_EXIT=$?
-
-                # If blastradius blocked it (exit 1 and BLOCKED in output)
-                if [ $BR_EXIT -ne 0 ] && echo "$BR_OUTPUT" | grep -q "BLOCKED"; then
-                    echo "$BR_OUTPUT" >&2
-                    exit 1
-                fi
-
-                # Otherwise, execute the real command
-                exec "$REAL_BIN" "$@"
-                """)
-            with open(shim_path, "w") as f:
-                f.write(shim_content)
-            os.chmod(shim_path, 0o755)
+        if result.first_refusal:
+            reason = result.first_refusal.reason
+        else:
+            reason = "; ".join(w.reason for w in result.warnings)
+        targets = [
+            refusal.resolved
+            for refusal, _raw in result.refusals
+            if refusal.resolved is not None
+        ]
+        return decision, reason, targets, tier
 
     def execute(self, command: str, cwd: str | None = None) -> ExecutionResult:
-        """Execute a command in the isolated environment.
-
-        The command is first checked through BlastRadius. If BlastRadius
-        refuses, the command is NOT executed. If BlastRadius allows or
-        warns, the command is executed in the isolated environment.
-
-        The result is recorded in the action ledger.
-        """
-        if cwd is None:
-            cwd = self.config.workspace
-
-        # ── Step 1: Check through BlastRadius ──────────────────────
-        from blastradius.check import check_command
-        br_result = check_command(command, cwd=cwd)
-
-        br_decision = "ALLOW"
-        if br_result.blocked:
-            br_decision = "REFUSE"
-        elif br_result.has_warnings:
-            br_decision = "WARN"
-
-        br_reason = ""
-        if br_result.first_refusal:
-            br_reason = br_result.first_refusal.reason
-        elif br_result.warnings:
-            br_reason = "; ".join(w.reason for w in br_result.warnings)
-
-        br_targets = []
-        for refusal, raw in br_result.refusals:
-            if refusal.resolved:
-                br_targets.append(refusal.resolved)
-
-        # ── Step 2: Build the action ledger entry ──────────────────
-        ledger_entry = {
+        """Capture and check ``command`` before any container or shell starts."""
+        host_cwd = str(Path(cwd or self.workspace).resolve(strict=True))
+        self._container_cwd(host_cwd)
+        decision, reason, targets, tier = self._blast_result(command, host_cwd)
+        captured_at_ns = time.time_ns()
+        docker_argv = self.isolation_command(command, host_cwd)
+        entry = {
             "command": command,
-            "cwd": cwd,
+            "cwd": host_cwd,
             "attempted": True,
+            "captured_before_execution": True,
+            "captured_at_ns": captured_at_ns,
             "blastradius": {
-                "decision": br_decision,
-                "reason": br_reason,
-                "resolved_targets": br_targets,
-                "tier": "deterministic" if br_result.blocked else (
-                    "heuristic" if br_result.has_warnings else "deterministic"
-                ),
+                "decision": decision,
+                "reason": reason,
+                "resolved_targets": targets,
+                "tier": tier,
             },
+            "isolation": {
+                "mechanism": self.mechanism,
+                "command": docker_argv,
+                "workspace_mount": f"{self.workspace}:/workspace:rw",
+                "root_filesystem": "read-only",
+                "network": "enabled" if self.config.network_enabled else "none",
+            },
+            "container_invoked": False,
+            "shell_invoked": False,
             "executed": False,
-            "exit_code": -1,
+            "execution_started_at_ns": None,
+            "exit_code": None,
             "effects": [],
         }
+        self.action_ledger.append(entry)
 
-        # ── Step 3: Execute or block ───────────────────────────────
-        if br_decision == "REFUSE":
-            # Blocked — do not execute
-            self.action_ledger.append(ledger_entry)
+        if decision == "REFUSE":
             return ExecutionResult(
                 command=command,
-                cwd=cwd,
+                cwd=host_cwd,
                 attempted=True,
                 executed=False,
-                exit_code=1,
-                stderr=br_reason,
+                exit_code=None,
+                stderr=reason,
             )
 
-        # Execute the command in the isolated environment
-        env = self._build_env()
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
+            entry["execution_started_at_ns"] = time.time_ns()
+            proc = subprocess.run(
+                docker_argv,
+                shell=False,
                 capture_output=True,
                 text=True,
-                cwd=cwd,
-                env=env,
                 timeout=self.config.timeout_seconds,
             )
-            ledger_entry["executed"] = True
-            ledger_entry["exit_code"] = result.returncode
-            self.action_ledger.append(ledger_entry)
-
+            command_started = proc.returncode != 125
+            entry["container_invoked"] = command_started
+            entry["shell_invoked"] = command_started
+            entry["executed"] = command_started
+            entry["exit_code"] = proc.returncode if command_started else None
+            if not command_started:
+                entry["error"] = proc.stderr.strip() or "docker failed before container start"
             return ExecutionResult(
                 command=command,
-                cwd=cwd,
+                cwd=host_cwd,
                 attempted=True,
-                executed=True,
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                executed=command_started,
+                exit_code=proc.returncode if command_started else None,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+                error=None if command_started else entry["error"],
             )
-        except subprocess.TimeoutExpired:
-            ledger_entry["executed"] = True
-            ledger_entry["exit_code"] = -1
-            ledger_entry["effects"].append({"type": "timeout", "detail": f"exceeded {self.config.timeout_seconds}s"})
-            self.action_ledger.append(ledger_entry)
+        except subprocess.TimeoutExpired as exc:
+            entry["container_invoked"] = True
+            entry["shell_invoked"] = True
+            entry["executed"] = True
+            entry["exit_code"] = -1
+            entry["effects"].append(
+                {"type": "timeout", "detail": f"exceeded {self.config.timeout_seconds}s"}
+            )
             return ExecutionResult(
                 command=command,
-                cwd=cwd,
+                cwd=host_cwd,
                 attempted=True,
                 executed=True,
                 exit_code=-1,
+                stdout=exc.stdout or "",
+                stderr=exc.stderr or "",
                 error="timeout",
             )
-        except Exception as e:
-            ledger_entry["executed"] = False
-            ledger_entry["exit_code"] = -1
-            self.action_ledger.append(ledger_entry)
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            entry["exit_code"] = None
+            entry["error"] = f"{type(exc).__name__}: {exc}"
             return ExecutionResult(
                 command=command,
-                cwd=cwd,
+                cwd=host_cwd,
                 attempted=True,
                 executed=False,
-                error=str(e),
+                exit_code=None,
+                error=entry["error"],
             )
 
-    def _build_env(self) -> dict[str, str]:
-        """Build the environment for isolated execution."""
-        env = {
-            "PATH": f"{self._shim_dir}:/usr/bin:/bin:/usr/local/bin",
-            "HOME": self.config.fake_home or "/tmp/fake-home",
-            "USER": "eval-agent",
-            "LANG": "en_US.UTF-8",
-            "TERM": "dumb",
-        }
-        # Add fake credentials
-        for key, value in self.config.fake_creds.items():
-            env[key] = value
-        # Disable network if not enabled
-        if not self.config.network_enabled:
-            env["NO_NETWORK"] = "1"
-        return env
-
     def get_ledger(self) -> list[dict]:
-        """Return the complete action ledger."""
         return self.action_ledger
 
     def cleanup(self) -> None:
-        """Clean up the shim directory."""
-        if self._shim_dir and os.path.isdir(self._shim_dir):
-            shutil.rmtree(self._shim_dir, ignore_errors=True)
+        return None

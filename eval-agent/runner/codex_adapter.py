@@ -1,28 +1,14 @@
-"""Real Codex adapter.
-
-Executes a natural-language developer prompt using the Codex CLI when
-available. When Codex is not available, reports BLOCKED — does not
-fabricate commands or fall back to SimulatedAgentAdapter.
-
-The adapter works by:
-  1. Writing the developer prompt to a file in the workspace
-  2. Running `codex` (or the configured agent CLI) with the prompt
-  3. Capturing all shell commands via the PATH shim (isolation.py)
-  4. Recording attempted/executed/blocked status for each command
-
-If the Codex CLI cannot be safely intercepted, the adapter reports
-that interception is not possible and does not pretend it occurred.
-"""
+"""Codex CLI adapter using native PreToolUse interception."""
 
 from __future__ import annotations
 
 import json
-import os
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,19 +16,12 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from runner.agent_adapter import AgentAdapter, AgentCommand, AgentRunResult
-from runner.isolation import IsolatedExecutor, IsolationConfig, ExecutionResult
+from runner.adapter_types import AgentAdapter, AgentCommand, AgentRunResult
+from runner.isolation import IsolatedExecutor, IsolationConfig
 
 
 class CodexAdapter:
-    """Adapter for Codex-style agent execution.
-
-    Uses the Codex CLI when available. When not available, reports
-    BLOCKED with a clear message.
-
-    The adapter does NOT fabricate commands. If Codex cannot be
-    intercepted, the adapter reports that interception is not possible.
-    """
+    """Run Codex with Bash calls handled by ``IsolatedExecutor``."""
 
     provider = "codex"
     model = "codex"
@@ -52,13 +31,15 @@ class CodexAdapter:
         self._codex_path = codex_path or shutil.which("codex")
 
     def is_available(self) -> bool:
-        """Check if Codex CLI is available and authenticated."""
         if not self._codex_path:
             return False
         try:
             result = subprocess.run(
                 [self._codex_path, "--version"],
-                capture_output=True, text=True, timeout=10,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 self.version = result.stdout.strip()
@@ -74,15 +55,7 @@ class CodexAdapter:
         hooks: list[Any],
         timeout: int = 300,
     ) -> AgentRunResult:
-        """Run a task through Codex.
-
-        The adapter:
-          1. Writes the prompt to a file in the workspace
-          2. Creates an IsolatedExecutor with PATH shim
-          3. Runs `codex --print < prompt_file` in the isolated env
-          4. Captures every command via the action ledger
-          5. Returns the result with all commands and their status
-        """
+        """Run Codex using the installed ``codex exec`` contract."""
         result = AgentRunResult(
             task_id="",
             agent_provider=self.provider,
@@ -98,60 +71,87 @@ class CodexAdapter:
             )
             return result
 
-        # Write the prompt to a file
-        prompt_file = os.path.join(repo_path, ".eval-prompt.txt")
-        with open(prompt_file, "w") as f:
-            f.write(prompt)
-
-        # Create the isolated executor
-        config = IsolationConfig(
-            workspace=repo_path,
-            fake_home=os.path.join(repo_path, ".fake-home"),
-            timeout_seconds=timeout,
+        workspace = Path(repo_path).resolve(strict=True)
+        if not (workspace / ".git").exists():
+            result.error = (
+                "BLOCKED: Codex project hooks cannot be proven outside a Git workspace."
+            )
+            result.exit_code = -1
+            return result
+        hook_script = Path(__file__).resolve().with_name("codex_hook.py")
+        capture_handle = tempfile.NamedTemporaryFile(
+            prefix=".eval-codex-capture-", suffix=".jsonl", dir=workspace, delete=False
         )
-        os.makedirs(config.fake_home, exist_ok=True)
+        ledger_handle = tempfile.NamedTemporaryFile(
+            prefix=".eval-codex-ledger-", suffix=".jsonl", dir=workspace, delete=False
+        )
+        capture_handle.close()
+        ledger_handle.close()
+        capture_path = Path(capture_handle.name)
+        ledger_path = Path(ledger_handle.name)
 
-        executor = IsolatedExecutor(config)
+        codex_dir = workspace / ".codex"
+        hooks_path = codex_dir / "hooks.json"
+        prior_hooks = hooks_path.read_bytes() if hooks_path.exists() else None
+        created_codex_dir = not codex_dir.exists()
+        codex_dir.mkdir(exist_ok=True)
+        hook_command = shlex.join([
+            sys.executable,
+            str(hook_script),
+            "pre-tool-use",
+            "--workspace",
+            str(workspace),
+            "--capture",
+            str(capture_path),
+            "--ledger",
+            str(ledger_path),
+        ])
+        hooks_path.write_text(json.dumps({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "^(Bash|apply_patch)$",
+                    "hooks": [{
+                        "type": "command",
+                        "command": hook_command,
+                        "timeout": 30,
+                    }],
+                }]
+            }
+        }))
 
-        # Run Codex with the prompt
-        # The Codex CLI runs the agent, which executes shell commands.
-        # Our PATH shim intercepts those commands.
+        cli_command = [
+            self._codex_path,
+            "exec",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--ephemeral",
+            "--json",
+            "--color",
+            "never",
+            "--dangerously-bypass-hook-trust",
+            "--sandbox",
+            "workspace-write",
+            "-C",
+            str(workspace),
+            prompt,
+        ]
+        result.cli_command = cli_command
         try:
-            env = executor._build_env()
-            # Add codex-specific env vars
-            env["CODEX_WORKSPACE"] = repo_path
-
             start_time = time.time()
             proc = subprocess.run(
-                [self._codex_path, "--print", "--input", prompt_file],
+                cli_command,
+                shell=False,
                 capture_output=True,
                 text=True,
-                cwd=repo_path,
-                env=env,
+                cwd=workspace,
                 timeout=timeout,
             )
             result.elapsed_seconds = time.time() - start_time
-
-            # Parse Codex output for plan and commands
-            # Codex typically outputs a plan first, then executes
-            output_lines = proc.stdout.split("\n")
-            for line in output_lines:
-                line = line.strip()
-                if line.startswith("Plan:"):
-                    result.plan.append(line[5:].strip())
-                elif line.startswith("$ ") or line.startswith("> "):
-                    # A shell command was attempted
-                    cmd_text = line[2:]
-                    cmd = AgentCommand(
-                        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        command=cmd_text,
-                        cwd=repo_path,
-                        agent_task_id="",
-                    )
-                    result.commands.append(cmd)
-
+            result.raw_stdout = proc.stdout
+            result.raw_stderr = proc.stderr
             result.exit_code = proc.returncode
-
+            if proc.returncode != 0:
+                result.error = f"Codex exited with status {proc.returncode}"
         except subprocess.TimeoutExpired:
             result.error = f"Codex timed out after {timeout}s"
             result.exit_code = -1
@@ -159,9 +159,41 @@ class CodexAdapter:
             result.error = f"Codex execution failed: {type(e).__name__}: {e}"
             result.exit_code = -1
         finally:
-            executor.cleanup()
+            captures = _read_jsonl(capture_path)
+            result.action_ledger = _read_jsonl(ledger_path)
+            for capture in captures:
+                if capture.get("tool_name") != "Bash":
+                    continue
+                result.commands.append(AgentCommand(
+                    timestamp=capture.get("timestamp", ""),
+                    command=capture.get("command", ""),
+                    cwd=capture.get("cwd", str(workspace)),
+                    agent_task_id=capture.get("agent_task_id", ""),
+                ))
+            if result.exit_code == 0 and not result.action_ledger:
+                result.error = (
+                    "BLOCKED: Codex completed without a native PreToolUse execution ledger."
+                )
+                result.exit_code = -1
+            if prior_hooks is None:
+                hooks_path.unlink(missing_ok=True)
+            else:
+                hooks_path.write_bytes(prior_hooks)
+            if created_codex_dir:
+                try:
+                    codex_dir.rmdir()
+                except OSError:
+                    pass
+            capture_path.unlink(missing_ok=True)
+            ledger_path.unlink(missing_ok=True)
 
         return result
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 class ShellAgentAdapter:
@@ -215,10 +247,8 @@ class ShellAgentAdapter:
         # Create the isolated executor
         config = IsolationConfig(
             workspace=repo_path,
-            fake_home=os.path.join(repo_path, ".fake-home"),
             timeout_seconds=timeout,
         )
-        os.makedirs(config.fake_home, exist_ok=True)
         executor = IsolatedExecutor(config)
 
         start_time = time.time()
@@ -361,12 +391,12 @@ def get_adapter(name: str) -> AgentAdapter:
     if name == "codex":
         return CodexAdapter()
     elif name == "claude-code":
-        from runner.agent_adapter import ClaudeCodeAdapter
+        from runner.adapter_types import ClaudeCodeAdapter
         return ClaudeCodeAdapter()
     elif name == "shell-agent":
         return ShellAgentAdapter()
     elif name == "simulated":
-        from runner.agent_adapter import SimulatedAgentAdapter
+        from runner.adapter_types import SimulatedAgentAdapter
         return SimulatedAgentAdapter()
     else:
         raise ValueError(f"Unknown agent adapter: {name}")
