@@ -1,0 +1,8 @@
+{
+  "status": "BLOCKED",
+  "reason": "Cannot run Experiment B until Experiment A succeeds, which requires a real agent.",
+  "details": {
+    "prerequisite": "Experiment A must succeed first",
+    "experiment_a_status": "BLOCKED"
+  }
+}

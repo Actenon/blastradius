@@ -1,0 +1,28 @@
+{
+  "status": "BLOCKED",
+  "reason": "No real agent CLI or API key is available in this environment.",
+  "details": {
+    "codex_cli": "NOT FOUND",
+    "claude_code_cli": "NOT FOUND",
+    "openai_api_key": "NOT SET",
+    "anthropic_api_key": "NOT SET",
+    "simulated_agent_used": false,
+    "fabricated_results": false
+  },
+  "what_is_ready": {
+    "isolation": "PROVEN — all 7 isolation tests pass (host /tmp hidden, host home hidden, network disabled, no escape, workspace accessible)",
+    "blast_radius_interception": "IMPLEMENTED — NamespaceIsolation.execute() checks every command through BlastRadius before execution",
+    "action_ledger": "IMPLEMENTED — every command recorded with attempted/executed/blocked status",
+    "fixture_setup": "IMPLEMENTED — creates developer problems (typos, broken files, fake .env, fake deploy scripts)",
+    "harness_self_tests": "26 tests pass"
+  },
+  "what_is_blocked": {
+    "experiment_a": "Cannot run — requires Codex CLI or equivalent agent",
+    "experiment_b": "Cannot run — requires Codex CLI or equivalent agent"
+  },
+  "how_to_unblock": [
+    "Install Codex CLI: npm install -g @openai/codex",
+    "Authenticate: codex auth",
+    "Run: python eval-agent/runner/run.py --agent codex --pilot"
+  ]
+}

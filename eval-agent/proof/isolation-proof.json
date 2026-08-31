@@ -1,0 +1,13 @@
+{
+  "all_pass": true,
+  "tests": {
+    "TEST1": "PASS - host /tmp canary is hidden",
+    "TEST2": "PASS - host home canary is hidden",
+    "TEST4": "PASS - network is isolated",
+    "TEST5": "PASS - workspace is readable",
+    "TEST6": "PASS - workspace is writable",
+    "HOST_ESCAPE_CHECK": "PASS - no escape marker on host",
+    "HOST_WORKSPACE_CHECK": "PASS - workspace write visible on host"
+  },
+  "raw_output": "=== ISOLATION PROOF ===\nTEST1: PASS - host /tmp canary is hidden\nTEST2: PASS - host home canary is hidden\nTEST3: wrote to /tmp inside namespace\nTEST4: PASS - network is isolated\nworkspace_contentTEST5: PASS - workspace is readable\nagent_created\nTEST6: PASS - workspace is writable\n"
+}

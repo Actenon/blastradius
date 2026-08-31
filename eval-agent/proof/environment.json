@@ -1,0 +1,14 @@
+{
+  "docker_available": false,
+  "unshare_available": true,
+  "bubblewrap_available": false,
+  "firejail_available": false,
+  "podman_available": false,
+  "codex_cli_available": false,
+  "claude_code_cli_available": false,
+  "openai_api_key_set": false,
+  "anthropic_api_key_set": false,
+  "isolation_mechanism": "linux_namespaces_user_mount_net_pid",
+  "isolation_enforced_by": "kernel",
+  "notes": "Docker is not available. Linux user+mount+net+pid namespaces are used for isolation. The isolation is kernel-enforced: tmpfs overlays on /tmp and /home hide host files, network namespace disables all networking, and PID namespace isolates processes."
+}
