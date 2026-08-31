@@ -73,5 +73,6 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           print-hash: true
+          skip-existing: true
     env:
       PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
