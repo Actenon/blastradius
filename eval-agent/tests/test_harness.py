@@ -31,7 +31,8 @@ sys.path.insert(0, str(EVAL_DIR))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from runner.blast_intercept import intercept_command, create_hook
-from runner.agent_adapter import ClaudeCodeAdapter, CodexAdapter, SimulatedAgentAdapter, AgentCommand
+from runner.codex_adapter import CodexAdapter, ShellAgentAdapter
+from runner.isolation import NamespaceIsolation
 from instrumentation.sandbox import snapshot_sandbox, diff_snapshots
 from classifiers.consequence import classify_command, Classification
 
@@ -192,29 +193,22 @@ class TestClassifier:
 class TestAgentAdapters:
     """Test that adapters correctly report availability."""
 
-    def test_claude_code_unavailable(self):
-        """Claude Code should be unavailable in a test environment."""
-        adapter = ClaudeCodeAdapter()
-        # In a CI/test environment, claude CLI is not installed.
-        # This test verifies the adapter handles that correctly.
-        available = adapter.is_available()
-        # We don't assert True/False — we assert it doesn't crash.
-        assert isinstance(available, bool)
-
     def test_codex_unavailable(self):
+        """Codex should be unavailable in a test environment."""
         adapter = CodexAdapter()
         available = adapter.is_available()
         assert isinstance(available, bool)
 
-    def test_simulated_always_available(self):
-        adapter = SimulatedAgentAdapter()
+    def test_shell_agent_always_available(self):
+        """ShellAgentAdapter should always be available."""
+        adapter = ShellAgentAdapter()
         assert adapter.is_available() is True
 
-    def test_simulated_is_marked_as_simulated(self):
-        """Simulated agent results must be marked as SIMULATED."""
-        adapter = SimulatedAgentAdapter()
-        assert adapter.provider == "simulated"
-        assert adapter.model == "simulated"
+    def test_shell_agent_is_marked_explicitly(self):
+        """ShellAgentAdapter must identify itself explicitly as non-LLM."""
+        adapter = ShellAgentAdapter()
+        assert "shell-agent" in adapter.provider
+        assert "prompt-mapper" in adapter.model
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -225,16 +219,23 @@ class TestAgentAdapters:
 class TestNoFabrication:
     """The harness must not claim simulated runs are real agent behaviour."""
 
-    def test_simulated_provider_is_explicit(self):
-        """The simulated adapter must identify itself explicitly."""
-        adapter = SimulatedAgentAdapter()
-        assert "simulated" in adapter.provider
-        assert "simulated" in adapter.model
+    def test_shell_agent_is_explicitly_marked(self):
+        """The shell-agent adapter must identify itself explicitly."""
+        adapter = ShellAgentAdapter()
+        assert "shell-agent" in adapter.provider
+        assert "prompt-mapper" in adapter.model
 
-    def test_real_adapter_reports_blocked_when_unavailable(self):
-        """When a real agent is unavailable, the harness must report BLOCKED."""
-        adapter = ClaudeCodeAdapter()
+    def test_codex_reports_blocked_when_unavailable(self):
+        """When Codex is unavailable, the adapter must report BLOCKED."""
+        adapter = CodexAdapter()
         if not adapter.is_available():
+            # The run_task method should return an error
+            from runner.codex_adapter import AgentRunResult
             result = adapter.run_task("/tmp", "test", [], 10)
             assert result.error is not None
-            assert "not available" in result.error.lower()
+            assert "not available" in result.error.lower() or "blocked" in result.error.lower()
+
+    def test_isolation_proof_passes(self):
+        """The isolation proof must pass for the harness to be trustworthy."""
+        result = NamespaceIsolation.run_isolation_proof()
+        assert result["all_pass"] is True, f"Isolation proof failed: {result.get('tests', {})}"

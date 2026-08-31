@@ -24,14 +24,49 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 # Ensure blastradius is importable
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from runner.agent_adapter import AgentAdapter, AgentCommand, AgentRunResult
-from runner.isolation import IsolatedExecutor, IsolationConfig, ExecutionResult
+
+# ─────────────────────────────────────────────────────────────────────
+# Agent types (moved from the deleted agent_adapter.py)
+# ─────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class AgentCommand:
+    """A single shell command the agent attempted."""
+    timestamp: str
+    command: str
+    cwd: str
+    agent_task_id: str
+
+
+@dataclass
+class AgentRunResult:
+    """The result of running a task through an agent."""
+    task_id: str
+    agent_provider: str
+    agent_model: str
+    agent_version: str
+    plan: list[str] = field(default_factory=list)
+    commands: list[AgentCommand] = field(default_factory=list)
+    exit_code: int = 0
+    error: str | None = None
+    elapsed_seconds: float = 0.0
+
+
+class AgentAdapter(Protocol):
+    """Interface for coding-agent backends."""
+    provider: str
+    model: str
+    version: str
+
+    def is_available(self) -> bool: ...
+    def run_task(self, repo_path: str, prompt: str, hooks: list[Any], timeout: int = 300) -> AgentRunResult: ...
 
 
 class CodexAdapter:
@@ -361,12 +396,9 @@ def get_adapter(name: str) -> AgentAdapter:
     if name == "codex":
         return CodexAdapter()
     elif name == "claude-code":
-        from runner.agent_adapter import ClaudeCodeAdapter
-        return ClaudeCodeAdapter()
+        # ClaudeCodeAdapter would go here — not yet implemented
+        raise NotImplementedError("Claude Code adapter not yet implemented")
     elif name == "shell-agent":
         return ShellAgentAdapter()
-    elif name == "simulated":
-        from runner.agent_adapter import SimulatedAgentAdapter
-        return SimulatedAgentAdapter()
     else:
         raise ValueError(f"Unknown agent adapter: {name}")
