@@ -1,0 +1,77 @@
+name: Publish to PyPI
+
+# Publishes blast-radius to PyPI on tag pushes (v*).
+#
+# Two publishing modes:
+# 1. Trusted publishing (OIDC) — preferred. No API token needed.
+#    Configure at: https://pypi.org/manage/project/blast-radius/settings/publishing/
+# 2. API token — fallback. Set the PYPI_API_TOKEN secret in this repo
+#    (or make it an org-wide secret).
+#
+# To publish v0.1.0+:
+#   git tag -a v0.1.0 -m "v0.1.0"
+#   git push origin v0.1.0
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build twine pytest
+
+      - name: Install package (editable) for test run
+        run: pip install -e .
+
+      - name: Run test suite before publishing
+        run: python -m pytest tests/ -v
+
+      - name: Build sdist and wheel
+        run: python -m build --sdist --wheel --outdir dist/
+
+      - name: Twine check
+        run: twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (trusted publishing)
+        if: ${{ !env.PYPI_API_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          print-hash: true
+
+      - name: Publish to PyPI (API token fallback)
+        if: ${{ env.PYPI_API_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          print-hash: true
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
