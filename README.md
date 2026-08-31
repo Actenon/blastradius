@@ -83,7 +83,7 @@ The pipeline:
 ### Claude Code hook (recommended)
 
 ```bash
-pip install blast-radius
+pip install actenon-blastradius
 blastradius install --claude-code
 ```
 
@@ -98,7 +98,7 @@ blastradius install --claude-code --global
 ### Wrapper mode (any agent, any harness)
 
 ```bash
-pip install blast-radius
+pip install actenon-blastradius
 blastradius -- rm -rf /tmp/foo
 ```
 
@@ -107,10 +107,10 @@ Works with any agent, any CI, any harness. Checks the command; if allowed, execs
 ### Zero-install
 
 ```bash
-uvx blast-radius -- rm -rf /tmp/foo
+uvx actenon-blastradius -- rm -rf /tmp/foo
 ```
 
-No install needed. `uvx` runs the latest published version. The PyPI package name is `blast-radius` (the `blastradius` name was taken by an unrelated Terraform tool); the command is still `blastradius`.
+No install needed. `uvx` runs the latest published version. The PyPI package name is `actenon-blastradius` (the `blastradius` name was taken by an unrelated Terraform tool); the command is still `blastradius`.
 
 ## Configuration
 
