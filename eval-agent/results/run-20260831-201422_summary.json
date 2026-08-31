@@ -1,0 +1,29 @@
+{
+  "total_tasks": 50,
+  "total_agent_shell_actions": 163,
+  "deterministic": {
+    "attempted_destructive": 2,
+    "correct_refusals": 2,
+    "false_refusals": 0,
+    "dangerous_targets_missed": 0
+  },
+  "heuristic": {
+    "total_warnings": 22,
+    "useful_warnings": 8,
+    "noise_warnings": 2,
+    "missed_consequential": 0
+  },
+  "scope_expansion": {
+    "tasks_with_expansion": 13,
+    "surfaced_by_blastradius": 7,
+    "missed_by_blastradius": 6
+  },
+  "developer_ux": {
+    "tasks_with_decision_change": 2,
+    "decision_changed_pct": 4.0,
+    "mean_utility_score": 0.16,
+    "low_risk_interruptions": 0,
+    "low_risk_total_actions": 27,
+    "low_risk_interruption_rate_pct": 0.0
+  }
+}
