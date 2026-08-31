@@ -81,6 +81,28 @@ def check_command(
         # Not destructive — allow.
         return CheckResult(allowed=True, refusals=[], command=command)
 
+    # BUG 5 fix: refuse destructive commands with zero targets.
+    # An rm with no targets is suspicious — the intent is unclear
+    # and it may be a misparsed command. Fail closed.
+    if not action.targets:
+        from .resolve import Refusal as _Refusal
+        return CheckResult(
+            allowed=False,
+            refusals=[(
+                _Refusal(
+                    rule="no-targets",
+                    reason=(
+                        f"destructive command '{action.command}' has no "
+                        f"targets — intent is unclear, refusing to proceed"
+                    ),
+                    raw=command,
+                ),
+                command,
+            )],
+            command=command,
+            action=action,
+        )
+
     # ── Step 3-6: Resolve and check each target ─────────────────────
     refusals: list[tuple[Refusal, str]] = []
 

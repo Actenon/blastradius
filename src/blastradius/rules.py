@@ -220,23 +220,51 @@ def _match_scope(pattern: str, path: str, repo_root: str | None) -> bool:
     # Handle ** patterns. fnmatch doesn't handle ** across path
     # separators correctly, so we do it manually.
     if "**" in pattern_real:
-        # Convert ** to a regex that matches any number of path components.
-        # Escape everything except ** and *.
+        # Convert ** to a regex that matches any number of path components,
+        # INCLUDING ZERO. This means /tmp/blast_repo/** matches both
+        # /tmp/blast_repo/foo AND /tmp/blast_repo itself.
+        #
+        # The key insight: /tmp/blast_repo/** splits into:
+        #   segment[0] = "/tmp/blast_repo/"  (ends with /)
+        #   segment[1] = ""                  (empty)
+        # The ** between them should match: nothing, or "foo", or "a/b/c".
+        # So the regex for ** after a trailing / is: (?:.*)?  which matches
+        # zero or more chars. But we also need the preceding / to be
+        # optional, so /tmp/blast_repo (no trailing /) also matches.
+        #
+        # We handle this by making the trailing / before ** optional:
+        #   /tmp/blast_repo/ + (?:.*)?  →  /tmp/blast_repo(?:/.*)?
         import re
 
-        # Split on ** to handle each segment.
-        # E.g. /tmp/**/foo → /tmp/.*/foo (but also /tmp/foo)
+        segments = pattern_real.split("**")
         regex_parts = []
-        for i, segment in enumerate(pattern_real.split("**")):
+        for i, segment in enumerate(segments):
             if i > 0:
-                regex_parts.append(".*")
+                # ** matches zero or more path components.
+                prev_seg = segments[i - 1]
+                if prev_seg.endswith("/"):
+                    # Make the trailing / optional: /tmp/ + (?:.*)?
+                    # becomes /tmp(?:/.*)? so /tmp itself matches.
+                    # We do this by removing the trailing / from the
+                    # previous segment's regex and adding (?:/.*)?
+                    # instead of (?:.*)?
+                    if regex_parts:
+                        # Remove the trailing / from the last regex part.
+                        last = regex_parts[-1]
+                        if last.endswith("/"):
+                            regex_parts[-1] = last[:-1]
+                    regex_parts.append("(?:/.*)?")
+                else:
+                    # /tmp**/foo → /tmp(?:/.*)?/foo — need the slash.
+                    regex_parts.append("(?:/.*)?")
             # Within a segment, * matches within a component.
             seg_regex = re.escape(segment).replace(r"\*", "[^/]*").replace(r"\?", ".")
             regex_parts.append(seg_regex)
         regex = "^" + "".join(regex_parts) + "$"
+
+        # Try matching with and without trailing slash.
         if re.match(regex, path_real):
             return True
-        # Also try with trailing slash removed.
         if re.match(regex, path_real.rstrip("/")):
             return True
         return False

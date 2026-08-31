@@ -79,7 +79,20 @@ def _cmd_wrapper(command_args: list[str]) -> int:
         # Exec the command. blastradius is replaced by the target process.
         # We use os.execvp so the command's stdout/stderr go directly
         # to the terminal, and its exit code becomes the process exit code.
-        os.execvp(command_args[0], command_args)
+        try:
+            os.execvp(command_args[0], command_args)
+        except FileNotFoundError:
+            print(
+                f"blastradius: command not found: {command_args[0]}",
+                file=sys.stderr,
+            )
+            return 127
+        except PermissionError:
+            print(
+                f"blastradius: permission denied: {command_args[0]}",
+                file=sys.stderr,
+            )
+            return 126
         # execvp doesn't return on success.
         return 0  # unreachable
 

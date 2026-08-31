@@ -89,6 +89,11 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
     Returns a DestructiveAction if destructive, None if not.
 
     tokens is the output of the tokeniser: ["rm", "-rf", "/tmp/foo"].
+
+    Handles ``--`` (end-of-flags separator): after ``--``, every
+    argument is a target, even if it starts with ``-``. This matters
+    for files named like ``-foo`` or ``-rf`` that would otherwise be
+    misclassified as flags.
     """
     if not tokens:
         return None
@@ -102,11 +107,35 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
         cmd = cmd.rsplit("\\", 1)[-1]
 
     args = tokens[1:]
-    flags = [a for a in args if a.startswith("-")]
-    non_flags = [a for a in args if not a.startswith("-")]
+
+    # ── Parse flags and targets, respecting -- ──────────────────────
+    # After --, every remaining argument is a target, even if it
+    # starts with -. This matches bash semantics.
+    flags: list[str] = []
+    non_flags: list[str] = []
+    seen_double_dash = False
+    for a in args:
+        if seen_double_dash:
+            non_flags.append(a)
+        elif a == "--":
+            seen_double_dash = True
+        elif a.startswith("-") and a != "-":
+            flags.append(a)
+        else:
+            non_flags.append(a)
 
     # ── rm, rmdir, shred, srm ───────────────────────────────────────
     if cmd in ("rm", "rmdir", "shred", "srm"):
+        # BUG 5 fix: refuse destructive commands with zero targets.
+        # An rm with no targets is suspicious — the intent is unclear
+        # and it may be a misparsed command.
+        if not non_flags:
+            return DestructiveAction(
+                command=cmd,
+                targets=[],
+                flags=flags,
+                source=f"{cmd} — direct filesystem deletion (no targets given)",
+            )
         return DestructiveAction(
             command=cmd,
             targets=non_flags,
@@ -122,15 +151,30 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
             # Re-parse: skip the argument to -s/--size.
             targets = []
             skip_next = False
+            seen_dd = False
             for a in args:
+                if seen_dd:
+                    if a.startswith("-s") and len(a) > 2 and not skip_next:
+                        continue
+                    if a == "-s" or a == "--size":
+                        skip_next = True
+                        continue
+                    if a.startswith("--size="):
+                        continue
+                    if a.startswith("-") and a != "-":
+                        continue
+                    targets.append(a)
+                    continue
                 if skip_next:
                     skip_next = False
                     continue
+                if a == "--":
+                    seen_dd = True
+                    continue
                 if a == "-s" or a == "--size":
-                    skip_next = True  # next arg is the size value
+                    skip_next = True
                     continue
                 if a.startswith("-s") and len(a) > 2:
-                    # -s0 (combined flag + value)
                     continue
                 if a.startswith("--size="):
                     continue
@@ -163,9 +207,6 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
     # ── find ... -delete ─────────────────────────────────────────────
     if cmd == "find":
         if "-delete" in args:
-            # The target is the search path — the first non-flag arg
-            # that isn't an argument to a find flag like -name, -type, etc.
-            # If no path given, it's "." (CWD).
             return DestructiveAction(
                 command=cmd,
                 targets=_find_search_paths(args),
@@ -186,11 +227,7 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
 
     # ── git clean -fdx ───────────────────────────────────────────────
     if cmd == "git" and len(args) >= 1 and args[0] == "clean":
-        # git clean removes untracked files.
-        # -f is required (force), -d removes directories, -x ignores gitignore.
         if "-f" in " ".join(flags) or "--force" in " ".join(flags):
-            # The target is effectively the CWD (the git repo).
-            # If a path is given, it's the last non-flag arg.
             targets = non_flags[1:] if len(non_flags) > 1 else ["."]
             return DestructiveAction(
                 command=cmd,
