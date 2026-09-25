@@ -261,7 +261,8 @@ class NamespaceIsolation:
 
         workspace = tempfile.mkdtemp(dir="/var/tmp", prefix="eval-proof-")
         canary_tmp = tempfile.mktemp(dir="/tmp", prefix="eval-canary-")
-        canary_home = os.path.join(os.path.expanduser("~"), ".eval_canary")
+        home_dir = os.path.expanduser("~")
+        canary_home = os.path.join(home_dir, ".eval_canary")
 
         # Write canaries
         with open(canary_tmp, "w") as f:
@@ -282,6 +283,11 @@ mount -t tmpfs none /tmp 2>/dev/null
 # Overlay tmpfs on /home
 mount -t tmpfs none /home 2>/dev/null
 mkdir -p /home/agent
+
+# Also overlay the invoking user's actual home dir. When the harness
+# runs as root, ~ is /root (not under /home), so the /home overlay above
+# would not hide the home canary.
+mount -t tmpfs none {home_dir} 2>/dev/null
 
 # Tests
 echo "=== ISOLATION PROOF ==="
