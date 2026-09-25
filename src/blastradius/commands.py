@@ -113,11 +113,111 @@ def _parse_flags_targets(args: list[str]) -> tuple[list[str], list[str]]:
     return flags, non_flags
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Command-runner wrappers
+# ─────────────────────────────────────────────────────────────────────
+#
+# identify_destructive only inspects the first token, so any program
+# that runs another command hides an ``rm`` behind it: ``sudo rm``,
+# ``env rm``, ``xargs rm``, ``timeout 5 rm`` … These must be unwrapped
+# so the real command is checked.
+
+_WRAPPERS: set[str] = {
+    "sudo", "doas", "env", "command", "exec", "nice", "nohup", "setsid",
+    "ionice", "stdbuf", "time", "timeout", "chrt", "taskset", "eatmydata",
+    "proxychains", "proxychains4", "catchsegv", "busybox", "nocache",
+    "xargs",
+}
+
+# Per-wrapper options that consume a *separate* following argument when
+# given un-glued (``nice -n 19``, ``sudo -u root``). Glued forms
+# (``-n19``, ``-c3``, ``-oL``) carry their value inline and take no
+# extra token. Options not listed are assumed to take no separate arg.
+_WRAPPER_OPTS_WITH_ARG: dict[str, set[str]] = {
+    "sudo": {"-u", "--user", "-g", "--group", "-C", "--close-from",
+             "-p", "--prompt", "-r", "--role", "-t", "--type",
+             "-U", "--other-user", "-h", "--host"},
+    "doas": {"-u", "-C"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
+    "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "taskset": {"-c", "--cpu-list", "-p", "--pid"},
+    "chrt": {"-p"},
+    "xargs": {"-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars",
+              "-d", "--delimiter", "-E", "-I", "--replace", "-a",
+              "--arg-file", "-L", "--max-lines"},
+}
+
+# Wrappers that eat a positional argument BEFORE the command
+# (``timeout DURATION cmd``).
+_WRAPPER_LEADING_POSITIONAL: dict[str, int] = {"timeout": 1}
+
+
+def _is_assignment(tok: str) -> bool:
+    """True for env/sudo NAME=VALUE assignment tokens."""
+    if "=" not in tok or tok.startswith("-"):
+        return False
+    name = tok.split("=", 1)[0]
+    return name.isidentifier()
+
+
+def _unwrap_wrappers(tokens: list[str]) -> list[str]:
+    """Strip leading command-runner wrappers so the real command shows.
+
+    ``sudo rm -rf /etc`` → ``rm -rf /etc``. Handles nested wrappers
+    (``sudo nice rm ...``). Wrapper options, their arguments, and
+    ``env``/``sudo`` NAME=VAL assignments are consumed. If the inner
+    command cannot be located the original tokens are returned unchanged
+    (callers then find nothing — identical to the pre-unwrap behaviour),
+    so unwrapping can only ever ADD a block, never remove one.
+    """
+    guard = 0
+    while tokens and guard < 16:
+        guard += 1
+        w = _strip_path(tokens[0])
+        if w not in _WRAPPERS:
+            break
+        rest = tokens[1:]
+        opts_with_arg = _WRAPPER_OPTS_WITH_ARG.get(w, set())
+        leading_positional = _WRAPPER_LEADING_POSITIONAL.get(w, 0)
+        i = 0
+        while i < len(rest):
+            a = rest[i]
+            if a == "--":
+                i += 1
+                break
+            if a.startswith("-") and a != "-":
+                if a in opts_with_arg and i + 1 < len(rest):
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if w in ("env", "sudo") and _is_assignment(a):
+                i += 1
+                continue
+            if leading_positional > 0:
+                leading_positional -= 1
+                i += 1
+                continue
+            break
+        new_tokens = rest[i:]
+        if not new_tokens:
+            return tokens
+        tokens = new_tokens
+    return tokens
+
+
 def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
     """Check if a tokenised command is a filesystem-destruction command.
 
     Returns a DestructiveAction if destructive, None if not.
     """
+    if not tokens:
+        return None
+
+    tokens = _unwrap_wrappers(tokens)
     if not tokens:
         return None
 
@@ -136,7 +236,14 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
 
     # ── truncate ─────────────────────────────────────────────────────
     if cmd == "truncate":
-        if "-s" in flags or "--size" in " ".join(flags):
+        # Detect the size flag in every form: ``-s N``, ``-s0`` (glued),
+        # ``--size N``, ``--size=0``.
+        has_size = any(
+            f == "-s" or f.startswith("-s")
+            or f == "--size" or f.startswith("--size=")
+            for f in flags
+        )
+        if has_size:
             targets = []
             skip_next = False
             seen_dd = False
@@ -191,34 +298,97 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
                 command=cmd, targets=_find_search_paths(args), flags=flags,
                 source="find -delete — deletes matched files",
             )
-        if "-exec" in args:
-            exec_idx = args.index("-exec")
-            exec_cmd = args[exec_idx + 1] if exec_idx + 1 < len(args) else ""
-            if exec_cmd in ("rm", "rmdir", "shred") or exec_cmd.endswith("/rm"):
-                return DestructiveAction(
-                    command=cmd, targets=_find_search_paths(args), flags=flags,
-                    source=f"find -exec {exec_cmd} — deletes matched files",
-                )
+        # -exec / -execdir <cmd> — a deletion command run per match.
+        for exec_flag in ("-exec", "-execdir"):
+            if exec_flag in args:
+                exec_idx = args.index(exec_flag)
+                exec_cmd = args[exec_idx + 1] if exec_idx + 1 < len(args) else ""
+                exec_cmd_base = _strip_path(exec_cmd)
+                if exec_cmd_base in ("rm", "rmdir", "shred", "srm"):
+                    return DestructiveAction(
+                        command=cmd, targets=_find_search_paths(args), flags=flags,
+                        source=f"find {exec_flag} {exec_cmd_base} — deletes matched files",
+                    )
 
-    # ── git clean -f ─────────────────────────────────────────────────
-    if cmd == "git" and len(args) >= 1 and args[0] == "clean":
-        if "-f" in " ".join(flags) or "--force" in " ".join(flags):
-            targets = non_flags[1:] if len(non_flags) > 1 else ["."]
+    # ── git clean -f / git reset --hard (honouring global options) ──
+    # ``git`` accepts global options BEFORE the subcommand
+    # (``git -C /path reset --hard``, ``git --work-tree=/ reset --hard``),
+    # which hid the destructive subcommand from an args[0] check.
+    if cmd == "git":
+        subcommand, sub_args, git_dirs = _git_split(args)
+        sub_flags, sub_non_flags = _parse_flags_targets(sub_args)
+
+        if subcommand == "clean" and (
+            "-f" in " ".join(sub_flags) or "--force" in " ".join(sub_flags)
+        ):
+            targets = _git_targets(git_dirs, sub_non_flags)
             return DestructiveAction(
-                command=cmd, targets=targets, flags=flags,
+                command=cmd, targets=targets, flags=sub_flags,
                 source="git clean -f — removes untracked files (including .env, secrets)",
             )
 
-    # ── git reset --hard ─────────────────────────────────────────────
-    if cmd == "git" and len(args) >= 1 and args[0] == "reset":
-        if "--hard" in args:
-            targets = non_flags[1:] if len(non_flags) > 1 else ["."]
+        if subcommand == "reset" and "--hard" in sub_args:
+            targets = _git_targets(git_dirs, sub_non_flags)
             return DestructiveAction(
-                command=cmd, targets=targets, flags=flags,
+                command=cmd, targets=targets, flags=sub_flags,
                 source="git reset --hard — discards working tree changes",
             )
 
     return None
+
+
+# Global git options (before the subcommand) that take a path we care
+# about — the directory git will actually operate on.
+_GIT_DIR_OPTS: set[str] = {"-C", "--work-tree", "--git-dir"}
+# Global git options that consume a following argument.
+_GIT_GLOBAL_OPTS_WITH_ARG: set[str] = {
+    "-C", "-c", "--work-tree", "--git-dir", "--namespace",
+    "--super-prefix", "--exec-path",
+}
+
+
+def _git_split(args: list[str]) -> tuple[str | None, list[str], list[str]]:
+    """Split git args into (subcommand, sub_args, operative_dirs).
+
+    Parses the global options that may appear before the subcommand,
+    collecting any directory git is pointed at (``-C``, ``--work-tree``,
+    ``--git-dir``) so a subcommand aimed outside the repo is still checked.
+    """
+    git_dirs: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if not a.startswith("-"):
+            return a, args[i + 1:], git_dirs
+        if "=" in a:
+            key, val = a.split("=", 1)
+            if key in _GIT_DIR_OPTS:
+                git_dirs.append(val)
+            i += 1
+            continue
+        if a in _GIT_GLOBAL_OPTS_WITH_ARG:
+            val = args[i + 1] if i + 1 < len(args) else ""
+            if a in _GIT_DIR_OPTS:
+                git_dirs.append(val)
+            i += 2
+            continue
+        i += 1
+    return None, [], git_dirs
+
+
+def _git_targets(git_dirs: list[str], sub_non_flags: list[str]) -> list[str]:
+    """Resolve the paths a git clean/reset will hit.
+
+    If git is pointed at an explicit directory (``-C``/``--work-tree``/
+    ``--git-dir``), that directory is the operative target; otherwise the
+    current repo (``.``) plus any explicit pathspecs.
+    """
+    if git_dirs:
+        return git_dirs + sub_non_flags
+    return sub_non_flags if sub_non_flags else ["."]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -233,6 +403,10 @@ def identify_risks(tokens: list[str]) -> list[RiskWarning]:
     they are warnings that surface consequential actions the developer
     should be aware of.
     """
+    if not tokens:
+        return []
+
+    tokens = _unwrap_wrappers(tokens)
     if not tokens:
         return []
 
