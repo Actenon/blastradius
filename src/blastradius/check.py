@@ -151,7 +151,6 @@ def check_command(
 
         # ── Leading NAME=VALUE assignments (and export/unset/read) ──
         assigns, rest = _split_leading_assignments(seg_tokens)
-        pure_prefix = not rest  # segment is only assignments / declarations
         seg_env = dict(run_env)
         for name, value in assigns:
             if value is None:
@@ -162,10 +161,34 @@ def check_command(
                     seg_env.pop(name, None)      # unresolved value → unknown
                 else:
                     seg_env[name] = exp[0]
-        if pure_prefix:
-            # Assignments persist for later segments; nothing to run.
-            run_env = seg_env
+        rest = _strip_leading_keywords(rest)
+        if not rest:
+            if assigns:
+                # Assignments persist for later segments.
+                run_env = seg_env
+            # A bare redirection (``> file``) still truncates its target.
+            for redir in seg_redirs:
+                ref = _judge_redirect(redir, run_cwd, seg_env, scope,
+                                      cwd_known=cwd_known)
+                if ref is not None:
+                    all_refusals.append((ref, redir.display))
             continue
+
+        # ``$CMD args``: the command word itself is an expansion.
+        if "$" in rest[0]:
+            exp = expand_target(rest[0], seg_env, cwd=run_cwd)
+            if isinstance(exp, Refusal):
+                all_refusals.append((Refusal(
+                    rule="unresolvable-expansion",
+                    reason=("the command name is a shell expansion that "
+                            "cannot be resolved — blastradius cannot tell "
+                            "what will run, so it refuses."),
+                    raw=rest[0], resolved=exp.resolved,
+                ), rest[0]))
+                continue
+            rest = exp[0].split() + rest[1:]
+            if not rest:
+                continue
 
         # ── cd / pushd: update the cwd of later segments ───────────
         cd_target = _cd_target(rest)
@@ -192,6 +215,18 @@ def check_command(
                 all_refusals.append((_wrap_inner(ref, seg_display), raw))
             all_warnings.extend(sub.warnings)
             all_actions.extend(sub.actions)
+
+        # ── Here-string / here-doc fed to a shell is a command string ─
+        head = _unwrap_head(rest)
+        if head in _SHELL_NAMES:
+            for redir in seg_redirs:
+                if redir.kind == "herestring" and redir.target:
+                    sub = check_command(
+                        redir.target, cwd=run_cwd, env=seg_env, scope=scope,
+                        max_glob_breadth=max_glob_breadth, _depth=_depth + 1,
+                    )
+                    for ref, raw in sub.refusals:
+                        all_refusals.append((_wrap_inner(ref, seg_display), raw))
 
         # ── Judge output redirections that truncate a file ─────────
         for redir in seg_redirs:
@@ -380,6 +415,27 @@ def _split_leading_assignments(
             return assigns, []
         break
     return assigns, tokens[i:]
+
+
+_LEADING_KEYWORDS = {
+    "!", "{", "}", "if", "then", "elif", "else", "fi", "while", "until",
+    "do", "done",
+}
+_SHELL_NAMES = {"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash"}
+
+
+def _strip_leading_keywords(tokens: list[str]) -> list[str]:
+    """Drop shell reserved words that precede the real command."""
+    i = 0
+    while i < len(tokens) and tokens[i] in _LEADING_KEYWORDS:
+        i += 1
+    return tokens[i:]
+
+
+def _unwrap_head(tokens: list[str]) -> str:
+    from .commands import _strip_path, _unwrap_wrappers
+    toks = _unwrap_wrappers(list(tokens))
+    return _strip_path(toks[0]) if toks else ""
 
 
 def _is_assign(tok: str) -> bool:

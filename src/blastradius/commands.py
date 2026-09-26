@@ -171,7 +171,7 @@ _WRAPPER_OPTS_WITH_ARG: dict[str, set[str]] = {
     "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
     "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
-    "taskset": {"-c", "--cpu-list", "-p", "--pid"},
+    "taskset": {"-p", "--pid"},
     "chrt": {"-p"},
     "xargs": {"-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars",
               "-d", "--delimiter", "-E", "-I", "--replace", "-a",
@@ -182,8 +182,10 @@ _WRAPPER_OPTS_WITH_ARG: dict[str, set[str]] = {
 # (``timeout DURATION cmd``, ``flock FILE cmd``, ``chroot DIR cmd``,
 # ``sg GROUP cmd``, ``chrt PRIO cmd`` when no -p, ``taskset MASK cmd``).
 _WRAPPER_LEADING_POSITIONAL: dict[str, int] = {
-    "timeout": 1, "flock": 1, "chroot": 1, "sg": 1, "chrt": 1, "taskset": 1,
+    "timeout": 1, "flock": 1, "chroot": 1, "sg": 1,
 }
+# (chrt PRIO and taskset MASK are left to the fallback scan: whether they
+# take a leading positional depends on other flags such as -p.)
 
 
 def _is_assignment(tok: str) -> bool:
