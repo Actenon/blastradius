@@ -174,6 +174,17 @@ def check_command(
                     all_refusals.append((ref, redir.display))
             continue
 
+        # ``function NAME { ...; }`` defines code that a later word may run.
+        if rest[0] == "function":
+            all_refusals.append((Refusal(
+                rule="unparseable-command-function",
+                reason=("command defines a shell function — blastradius "
+                        "refuses to model function definitions. If this is "
+                        "intentional, run it yourself outside the agent."),
+                raw=command,
+            ), command))
+            continue
+
         # ``$CMD args``: the command word itself is an expansion.
         if "$" in rest[0]:
             exp = expand_target(rest[0], seg_env, cwd=run_cwd)

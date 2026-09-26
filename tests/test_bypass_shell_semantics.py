@@ -141,6 +141,7 @@ MUST_BLOCK = [
     "if true; then rm -rf /etc; fi",
     "while true; do rm -rf /etc; done",
     "true && eval 'rm -rf /etc'",
+    "function f { rm -rf /etc; }; f",
     "rm -rf {/etc,build}",
     "rm -rf build{,/../../../../../../../../etc}",
     "{rm,x} -rf /etc",

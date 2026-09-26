@@ -212,7 +212,7 @@ Every refusal names a rule ID:
 - Python 3.10+
 - Zero runtime dependencies
 - Sub-millisecond decision time (well under the 10ms target)
-- 340 tests, including all six reconstructed incidents, wrapper/expansion and shell-semantics bypass suites, and a full must-allow suite
+- 341 tests, including all six reconstructed incidents, wrapper/expansion and shell-semantics bypass suites, and a full must-allow suite
 
 ## License
 
