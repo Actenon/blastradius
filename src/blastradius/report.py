@@ -26,6 +26,7 @@ _UNOVERRIDABLE = {
     "empty-variable-expansion",
     "tilde-ambiguous",
     "empty-target",
+    "unresolvable-expansion",
 }
 
 

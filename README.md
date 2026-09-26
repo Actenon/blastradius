@@ -62,11 +62,12 @@ The pipeline:
 
 1. **Tokenise** — split the command respecting quotes. Refuse `;`, `&&`, `||`, `|`, `$(...)`, backticks, subshells, `eval`. If we can't fully model it, we refuse.
 
-2. **Identify** — is this a destructive command? `rm`, `rmdir`, `shred`, `truncate`, `dd`, `find -delete`, `git clean -f`, `git reset --hard`. If not, allow (blastradius only guards filesystem destruction).
+2. **Identify** — is this a destructive command? `rm`, `rmdir`, `shred`, `truncate`, `dd`, `find -delete`, `find -exec/-execdir rm`, `git clean -f`, `git reset --hard`. Command-runner wrappers (`sudo`, `doas`, `env`, `command`, `exec`, `nice`, `nohup`, `timeout`, `ionice`, `stdbuf`, `setsid`, `xargs`, `busybox`, …) are unwrapped first, so `sudo rm -rf /etc` is checked as `rm -rf /etc`. `git` global options (`-C`, `--work-tree`, `--git-dir`) before the subcommand are honoured, so `git -C / clean -fdx` is caught. If not destructive, allow (blastradius only guards filesystem destruction).
 
 3. **Resolve** — for each target argument:
    - Expand `$VAR` and `${VAR}` against the real environment.
    - If any variable is unset or empty → **refuse** (`empty-variable-expansion`). This is the Guillemot rule.
+   - Only `$VAR` and `${VAR}` are modelled. Any other expansion left in the target — `${VAR:-default}`, `${VAR:=x}`, `${#VAR}`, `${VAR%pattern}`, `$1`, `$$`, `$@` — cannot be resolved with certainty, so → **refuse** (`unresolvable-expansion`). Fail closed.
    - If the target starts with `~` → **refuse** (`tilde-ambiguous`). Tilde means both "home directory" and "a file literally called tilde." Require an explicit absolute path.
    - Expand globs against the real filesystem from the correct CWD.
    - Canonicalise: resolve `..`, resolve symlinks, produce an absolute real path.
@@ -179,6 +180,7 @@ Every refusal names a rule ID:
 | `empty-variable-expansion` | A `$VAR` in the target is unset or empty | No |
 | `tilde-ambiguous` | Target starts with `~` | No |
 | `empty-target` | Target is an empty string after expansion | No |
+| `unresolvable-expansion` | Target uses an expansion beyond `$VAR`/`${VAR}` (e.g. `${VAR:-/}`, `$1`, `$$`) | No |
 | `out-of-scope` | Target is outside the allowed scope | Yes (via `.blastradius`) |
 | `glob-no-match` | Glob pattern matched no files | No |
 | `glob-breadth` | Glob expanded to >100 entries or matched repo-root-level files | Yes (via config) |
@@ -196,7 +198,7 @@ Every refusal names a rule ID:
 - Python 3.10+
 - Zero runtime dependencies
 - Sub-millisecond decision time (well under the 10ms target)
-- 128 tests, including all six reconstructed incidents and a full must-allow suite
+- 198 tests, including all six reconstructed incidents, a wrapper/expansion bypass suite, and a full must-allow suite
 
 ## License
 

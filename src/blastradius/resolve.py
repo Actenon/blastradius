@@ -167,6 +167,29 @@ def resolve_target(
             variables_checked=unset,
         )
 
+    # ── Step 1b: Fail closed on any expansion we did not model ──────
+    # We only expand plain $VAR and ${VAR}. If a ``$`` survives, the
+    # target contains a construct we cannot resolve with certainty —
+    # ``${VAR:-/}``, ``${VAR:=/}``, ``${#VAR}``, ``${VAR%/*}``, ``$1``,
+    # ``$$``, ``$@``, etc. In a real shell these produce a concrete path
+    # we are not computing (``rm -rf ${UNSET:-/}`` deletes ``/``).
+    # Principle 2 (fail closed): refuse rather than guess.
+    if "$" in expanded:
+        return Refusal(
+            rule="unresolvable-expansion",
+            reason=(
+                "target contains a shell expansion blastradius does not "
+                "model (only $VAR and ${VAR} are expanded; forms like "
+                "${VAR:-default}, ${#VAR}, ${VAR%pattern}, $1, $$, $@ are "
+                "not). The resolved target cannot be determined with "
+                "certainty — refusing. If this is intentional, run it "
+                "yourself outside the agent."
+            ),
+            raw=raw,
+            resolved=expanded,
+            variables_checked=variables_used,
+        )
+
     # ── Step 2: Tilde handling ──────────────────────────────────────
     # Refuse any target that starts with ~. The ~ is ambiguous: it
     # could be $HOME or a file literally named ~. Require an explicit
