@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -84,8 +85,9 @@ def _cmd_wrapper(command_args: list[str], *, strict: bool = False, quiet: bool =
         print("blastradius: no command given after --", file=sys.stderr)
         return 2
 
-    # Reconstruct the command string.
-    command = " ".join(command_args)
+    # Reconstruct the command string, re-quoting each argv word so the
+    # checker sees exactly the words that will be exec'd.
+    command = shlex.join(command_args)
 
     result = check_command(command)
 

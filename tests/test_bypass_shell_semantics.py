@@ -280,3 +280,18 @@ class TestTokeniserRedirections:
     def test_brace_expansion(self):
         result = tokenise("rm {a,b}/x c{1..3} '{q,r}' {}")
         assert result.segments == [["rm", "a/x", "b/x", "c1", "c2", "c3", "{q,r}", "{}"]]
+
+
+class TestWrapperModeQuoting:
+    def test_argv_quoting_preserved(self, capsys, monkeypatch, repo):
+        """Wrapper mode must re-quote argv; ' '.join lost the -c string."""
+        from blastradius.cli import main
+
+        root, env = repo
+        monkeypatch.chdir(root)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        rc = main(["--", "sh", "-c", "rm -rf /etc"])  # blocked: never execs
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "floor-path" in err and "/etc" in err
