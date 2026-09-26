@@ -27,7 +27,15 @@ _UNOVERRIDABLE = {
     "tilde-ambiguous",
     "empty-target",
     "unresolvable-expansion",
+    "stdin-targets",
+    "ambiguous-cwd",
+    "recursion-depth",
+    "no-targets",
 }
+
+
+def _unoverridable(rule: str) -> bool:
+    return rule in _UNOVERRIDABLE or rule.startswith("unparseable-command-")
 
 
 def format_refusal(refusal: Refusal, *, command: str) -> str:
@@ -45,7 +53,7 @@ def format_refusal(refusal: Refusal, *, command: str) -> str:
     lines.append("")
     lines.append(f"  reason    {refusal.reason}")
 
-    suffix = " (cannot be overridden)" if refusal.rule in _UNOVERRIDABLE else ""
+    suffix = " (cannot be overridden)" if _unoverridable(refusal.rule) else ""
     lines.append("")
     lines.append(f"  rule      {refusal.rule}{suffix}")
 
@@ -77,7 +85,7 @@ def format_multi_refusal(refusals: list[tuple[Refusal, str]], *, command: str) -
         if refusal.resolved:
             lines.append(f"    resolved {refusal.resolved}")
         lines.append(f"    reason   {refusal.reason}")
-        suffix = " (cannot be overridden)" if refusal.rule in _UNOVERRIDABLE else ""
+        suffix = " (cannot be overridden)" if _unoverridable(refusal.rule) else ""
         lines.append(f"    rule     {refusal.rule}{suffix}")
         lines.append("")
 

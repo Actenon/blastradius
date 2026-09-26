@@ -60,9 +60,15 @@ blastradius -- rm -rf "$TMPDIR/session-123"
 
 The pipeline:
 
-1. **Tokenise** — split the command respecting quotes. Refuse `;`, `&&`, `||`, `|`, `$(...)`, backticks, subshells, `eval`. If we can't fully model it, we refuse.
+1. **Tokenise** — one quote-aware lexer splits the command into simple commands on `;`, `&&`, `||`, `|`, `|&` and `&`, removes output/input redirections from each command's arguments, and performs brace expansion (`{a,b}`, `{1..3}`). It refuses `$(...)` and backticks (also inside double quotes), `<(...)`/`>(...)`, `eval`, unquoted `(`/`)`, newlines, unterminated quotes and `${...}` containing quotes. If we can't fully model it, we refuse.
 
-2. **Identify** — is this a destructive command? `rm`, `rmdir`, `shred`, `truncate`, `dd`, `find -delete`, `find -exec/-execdir rm`, `git clean -f`, `git reset --hard`. Command-runner wrappers (`sudo`, `doas`, `env`, `command`, `exec`, `nice`, `nohup`, `timeout`, `ionice`, `stdbuf`, `setsid`, `xargs`, `busybox`, …) are unwrapped first, so `sudo rm -rf /etc` is checked as `rm -rf /etc`. `git` global options (`-C`, `--work-tree`, `--git-dir`) before the subcommand are honoured, so `git -C / clean -fdx` is caught. If not destructive, allow (blastradius only guards filesystem destruction).
+2. **Identify** — is this a destructive command? `rm`, `rmdir`, `unlink`, `shred`, `truncate`, `dd`, `tee` (without `-a`), `find -delete`, `find -exec/-execdir rm`, `find -fprint/-fprintf/-fls`, `git clean -f`, `git reset --hard`. If not destructive, allow (blastradius only guards filesystem destruction). Before identifying:
+   - Leading `NAME=value` assignments and shell reserved words (`!`, `{`, `then`, `do`, …) are skipped, and a `$VAR` command name is expanded (refused if it cannot be).
+   - Command-runner wrappers (`sudo`, `doas`, `env`, `nice`, `nohup`, `timeout`, `chrt`, `taskset`, `flock`, `watch`, `chroot`, `systemd-run`, `nsenter`, `unshare`, `firejail`, `strace`, `fakeroot`, `busybox`, …) are unwrapped. If a wrapper's options do not lead to a known command, the remaining words are scanned for the first destructive command. This can refuse a harmless wrapped command that merely mentions one (`sudo grep -r rm /etc`); that false positive is accepted. Directories a wrapper switches to (`sudo -D`, `env -C`, `chroot`, `systemd-run`) are judged too.
+   - Inner command strings — `sh/bash/zsh/dash/ksh/mksh/ash -c STR`, `env -S STR`, `su/runuser/script/flock -c STR`, `sg GROUP STR`, `watch STR`, `eval ARGS`, a here-string fed to a shell, `find -exec sh -c STR`, `xargs sh -c STR` — are checked recursively with the same cwd, environment and scope. A block inside becomes a block outside, carrying the inner rule. Nesting is capped (`recursion-depth`).
+   - A destructive command run by `xargs`/`parallel` also receives targets from stdin, so it is refused (`stdin-targets`).
+   - `git` global options (`-C`, `--work-tree`, `--git-dir`) before the subcommand are honoured.
+   - Across `;`/`&&`/`||`, assignments (`X=/etc; …`, `export`, `unset`, `read`) and `cd`/`pushd` carry into later commands; after `source`, `popd` or an unresolvable `cd`, the directory is unknown and destructive commands are refused (`ambiguous-cwd`).
 
 3. **Resolve** — for each target argument:
    - Expand `$VAR` and `${VAR}` against the real environment.
@@ -77,7 +83,9 @@ The pipeline:
    - **Scope**: from `.blastradius` in the repo root, or defaults (repo root, `/tmp/**`, `$TMPDIR/**`, build dirs).
    - **Glob breadth**: a glob that expands to more than 100 entries, or matches anything at repo root level, is refused even inside scope.
 
-5. **Report** — if any target is refused, print the refusal and exit non-zero. If all targets pass, exec the command.
+5. **Redirections** — an output redirection that truncates (`>`, `>|`, `&>`, `N>`, `>&file`) is judged exactly like a `truncate` target, with the same floor, scope, tilde and expansion rules, so `: > /etc/passwd` is refused. Appends (`>>`), fd duplications (`2>&1`, `>&2`) and `/dev/null`, `/dev/stdout`, `/dev/stderr`, `/dev/tty`, `/dev/fd/N` are exempt. Redirections are never treated as `rm` targets.
+
+6. **Report** — if any target is refused, print the refusal and exit non-zero. If all targets pass, exec the command.
 
 ## Installation
 
@@ -158,15 +166,13 @@ There is no flag, no config entry, and no environment variable that can make the
 
 ## What it refuses to model
 
-blastradius v1 refuses to parse commands containing:
+`;`, `&&`, `||`, `|`, `|&` and `&` are split, and every simple command is checked (a compound command is blocked if any part is). blastradius refuses to parse commands containing:
 
-- `;` (command separator)
-- `&&` or `||` (conditional execution)
-- `|` (pipeline)
-- `$(...)` or backticks (command substitution)
+- `$(...)` or backticks (command substitution), including inside double quotes
 - `<(...)` or `>(...)` (process substitution)
-- `eval`
-- Subshells starting with `(`
+- `eval` as the whole command (elsewhere its arguments are checked as a command string)
+- Unquoted `(` or `)` anywhere (subshells, function definitions, `case` patterns, arithmetic)
+- Newlines, unterminated quotes, `${...}` containing quotes or nested expansions, and brace expansions producing more than 1024 words
 
 This is a feature, not a limitation. If we can't fully model what the command will do, we refuse it. The user can run it themselves outside the agent — the guard is for the agent path, not the human path.
 
@@ -184,12 +190,20 @@ Every refusal names a rule ID:
 | `out-of-scope` | Target is outside the allowed scope | Yes (via `.blastradius`) |
 | `glob-no-match` | Glob pattern matched no files | No |
 | `glob-breadth` | Glob expanded to >100 entries or matched repo-root-level files | Yes (via config) |
-| `unparseable-command-*` | Command contains `;`, `&&`, `|`, `$()`, etc. | No |
+| `stdin-targets` | Destructive command run by `xargs`/`parallel` (targets arrive on stdin) | No |
+| `ambiguous-cwd` | Destructive command or truncating redirection after a directory change that cannot be resolved | No |
+| `recursion-depth` | Inner command strings nested beyond the modelling depth | No |
+| `no-targets` | Destructive command with no targets | No |
+| `unparseable-command-*` | Command contains `$()`, backticks, `<()`, `eval`, unquoted `(`, a newline, an unterminated quote, etc. | No |
 
 ## Limitations
 
 - **Not a sandbox.** blastradius refuses destructive commands; it does not prevent an agent from writing files, executing code, or making network calls. It guards one failure class: destructive filesystem deletion.
-- **v1 tokeniser is conservative.** Compound commands (`cd foo && rm bar`) are refused, not parsed. This will widen in future versions.
+- **Interpreters and scripts are not modelled.** `python -c`, `perl -e`, `node -e`, `ruby -e`, `bash script.sh`, a shell reading commands from a pipe or a file (`curl … | sh`, `sh < file`), `git -c alias.x='!…'`, and aliases or functions already defined in the user's shell run code blastradius cannot see. They are allowed, not refused.
+- **Only the listed commands are destructive.** Tools that overwrite files by other means (`cp`, `mv`, `install`, `rsync --delete`, `sed -i`, `sort -o`, `curl -o`, `strace -o`, `chmod -R`, `chown -R`, `mkfs`) are not judged.
+- **Time of check vs time of use.** Paths are resolved when the command is checked; a symlink or directory swapped between the check and the exec is not re-checked.
+- **Wrapper false positives.** After a wrapper, the fallback scan can refuse a harmless command that mentions a destructive one as an argument (`sudo grep -r rm /etc`).
+- **Positional parameters are not modelled.** `sh -c 'rm -rf "$1"' _ build` is refused, because `$1` inside the string is not resolved.
 - **No Windows path support beyond basic detection.** The floor list includes `C:\Windows` and `C:\Users`, but glob expansion and canonicalisation are POSIX-oriented.
 - **No daemon, no GUI, no telemetry.** It is a single command that checks and execs (or refuses). Nothing else.
 
@@ -198,7 +212,7 @@ Every refusal names a rule ID:
 - Python 3.10+
 - Zero runtime dependencies
 - Sub-millisecond decision time (well under the 10ms target)
-- 198 tests, including all six reconstructed incidents, a wrapper/expansion bypass suite, and a full must-allow suite
+- 340 tests, including all six reconstructed incidents, wrapper/expansion and shell-semantics bypass suites, and a full must-allow suite
 
 ## License
 
