@@ -118,8 +118,8 @@ def is_floor(path: str, *, home: str | None = None) -> bool:
 
     real = os.path.realpath(path)
 
-    # $HOME itself.
-    if real == os.path.realpath(home):
+    # $HOME itself. (An empty HOME must not match: realpath("") is the CWD.)
+    if home and real == os.path.realpath(home):
         return True
 
     # Explicit floor list.

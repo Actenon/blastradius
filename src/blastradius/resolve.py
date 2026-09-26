@@ -137,6 +137,78 @@ def resolve_target(
     if env is None:
         env = dict(os.environ)
 
+    # ── Steps 1 and 1b: variable expansion (fail closed) ────────────
+    exp = expand_target(raw, env, cwd=cwd)
+    if isinstance(exp, Refusal):
+        return exp
+    expanded, variables_used = exp
+
+    # ── Step 2: Tilde handling ──────────────────────────────────────
+    # Refuse any target that starts with ~. The ~ is ambiguous: it
+    # could be $HOME or a file literally named ~. Require an explicit
+    # absolute path.
+    if expanded.startswith("~"):
+        return Refusal(
+            rule="tilde-ambiguous",
+            reason=(
+                "target starts with ~ — tilde is ambiguous (could be "
+                "$HOME or a file literally named ~). Use an explicit "
+                "absolute path."
+            ),
+            raw=raw,
+            resolved=expanded,
+            variables_checked=variables_used,
+        )
+
+    # ── Step 3: Empty target after expansion ────────────────────────
+    if expanded == "":
+        return Refusal(
+            rule="empty-target",
+            reason="target is an empty string after expansion — would resolve to CWD",
+            raw=raw,
+            resolved=cwd,
+            variables_checked=variables_used,
+        )
+
+    # ── Step 4: Glob expansion or direct resolution ─────────────────
+    primary = _resolve_expanded(expanded, cwd=cwd, raw=raw, variables_used=variables_used)
+
+    # ── Step 5: Word splitting ──────────────────────────────────────
+    # The tokeniser has removed quotes, so we cannot tell whether a
+    # variable was quoted. If a variable's value contains IFS characters,
+    # an unquoted expansion splits into several targets
+    # (X="build /etc"; rm -rf $X deletes /etc). Judge the whole value AND
+    # every field — an over-approximation, never an under-approximation.
+    fields = _split_fields(expanded, variables_used, env)
+    if not fields or isinstance(primary, Refusal):
+        return primary
+    paths = list(primary.paths)
+    was_glob = primary.was_glob
+    for f in fields:
+        r = _resolve_expanded(f, cwd=cwd, raw=raw, variables_used=variables_used)
+        if isinstance(r, Refusal):
+            return r
+        was_glob = was_glob or r.was_glob
+        for p in r.paths:
+            if p not in paths:
+                paths.append(p)
+    return Resolved(raw=raw, paths=paths, variables_used=variables_used, was_glob=was_glob)
+
+
+def expand_target(
+    raw: str,
+    env: dict[str, str],
+    *,
+    cwd: str | None = None,
+) -> tuple[str, list[str]] | Refusal:
+    """Expand $VAR / ${VAR} in ``raw``; refuse unset/empty or unmodelled.
+
+    Returns (expanded, variables_used) or a Refusal
+    (``empty-variable-expansion`` or ``unresolvable-expansion``).
+    """
+    if cwd is None:
+        cwd = os.getcwd()
+
     # ── Step 1: Variable expansion ──────────────────────────────────
     expanded, variables_used, unset = _expand_variables(raw, env)
 
@@ -171,9 +243,9 @@ def resolve_target(
     # We only expand plain $VAR and ${VAR}. If a ``$`` survives, the
     # target contains a construct we cannot resolve with certainty —
     # ``${VAR:-/}``, ``${VAR:=/}``, ``${#VAR}``, ``${VAR%/*}``, ``$1``,
-    # ``$$``, ``$@``, etc. In a real shell these produce a concrete path
-    # we are not computing (``rm -rf ${UNSET:-/}`` deletes ``/``).
-    # Principle 2 (fail closed): refuse rather than guess.
+    # ``$$``, ``$@``, ``$'...'``, etc. In a real shell these produce a
+    # concrete path we are not computing (``rm -rf ${UNSET:-/}`` deletes
+    # ``/``). Principle 2 (fail closed): refuse rather than guess.
     if "$" in expanded:
         return Refusal(
             rule="unresolvable-expansion",
@@ -190,38 +262,30 @@ def resolve_target(
             variables_checked=variables_used,
         )
 
-    # ── Step 2: Tilde handling ──────────────────────────────────────
-    # Refuse any target that starts with ~. The ~ is ambiguous: it
-    # could be $HOME or a file literally named ~. Require an explicit
-    # absolute path.
-    if expanded.startswith("~"):
-        return Refusal(
-            rule="tilde-ambiguous",
-            reason=(
-                "target starts with ~ — tilde is ambiguous (could be "
-                "$HOME or a file literally named ~). Use an explicit "
-                "absolute path."
-            ),
-            raw=raw,
-            resolved=expanded,
-            variables_checked=variables_used,
-        )
+    return expanded, variables_used
 
-    # ── Step 3: Empty target after expansion ────────────────────────
-    if expanded == "":
-        return Refusal(
-            rule="empty-target",
-            reason="target is an empty string after expansion — would resolve to CWD",
-            raw=raw,
-            resolved=cwd,
-            variables_checked=variables_used,
-        )
 
-    # ── Step 4: Glob expansion or direct resolution ─────────────────
+def _split_fields(expanded: str, variables_used: list[str], env: dict[str, str]) -> list[str]:
+    """Fields an unquoted expansion would split into ([] if no split)."""
+    if not variables_used:
+        return []
+    ifs = set(" \t\n") | set(env.get("IFS", ""))
+    if not any(ch in ifs for name in variables_used for ch in env.get(name, "")):
+        return []
+    fields = [f for f in re.split("[" + re.escape("".join(sorted(ifs))) + "]", expanded) if f]
+    return fields if fields != [expanded] else []
+
+
+def _resolve_expanded(
+    expanded: str,
+    *,
+    cwd: str,
+    raw: str,
+    variables_used: list[str],
+) -> ResolveResult:
     if _has_glob_chars(expanded):
         return _resolve_glob(expanded, cwd=cwd, raw=raw, variables_used=variables_used)
-    else:
-        return _resolve_single(expanded, cwd=cwd, raw=raw, variables_used=variables_used)
+    return _resolve_single(expanded, cwd=cwd, raw=raw, variables_used=variables_used)
 
 
 def _resolve_single(
@@ -297,6 +361,7 @@ def resolve_targets(
 
 
 __all__ = [
+    "expand_target",
     "Refusal",
     "Resolved",
     "ResolveResult",
