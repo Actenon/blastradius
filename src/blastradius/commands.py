@@ -42,6 +42,9 @@ class DestructiveAction:
     targets: list[str]
     flags: list[str]
     source: str
+    # True when further targets arrive on stdin (xargs / parallel) and so
+    # cannot be resolved — the checker refuses (fail closed).
+    stdin_targets: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -114,29 +117,54 @@ def _parse_flags_targets(args: list[str]) -> tuple[list[str], list[str]]:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Command-runner wrappers
+# Command-runner wrappers and inner command strings
 # ─────────────────────────────────────────────────────────────────────
 #
-# identify_destructive only inspects the first token, so any program
-# that runs another command hides an ``rm`` behind it: ``sudo rm``,
-# ``env rm``, ``xargs rm``, ``timeout 5 rm`` … These must be unwrapped
-# so the real command is checked.
+# identify_destructive only inspects the first token, so any program that
+# runs another command hides an ``rm`` behind it: ``sudo rm``, ``env rm``,
+# ``xargs rm``, ``timeout 5 rm``, ``chrt 99 rm``, ``flock f rm`` ... These
+# are unwrapped so the real command is checked. When option parsing does
+# not land on a recognised command, we scan the remaining tokens for the
+# first destructive verb and evaluate from there (this covers wrappers with
+# options or leading positionals we do not model precisely — sudo -D DIR,
+# chrt PRIO, taskset MASK, chroot DIR, nsenter/unshare/firejail ... — at the
+# cost of an accepted false positive such as ``sudo grep -r rm /etc``).
+
+_DESTRUCTIVE_NAMES: frozenset[str] = frozenset({
+    "rm", "rmdir", "shred", "srm", "unlink", "truncate", "dd",
+    "find", "git", "tee",
+})
+
+# Shells whose ``-c STRING`` (and ``env -S STRING``) argument is another
+# command we must check recursively.
+_SHELLS: frozenset[str] = frozenset({
+    "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "busybox",
+})
 
 _WRAPPERS: set[str] = {
     "sudo", "doas", "env", "command", "exec", "nice", "nohup", "setsid",
     "ionice", "stdbuf", "time", "timeout", "chrt", "taskset", "eatmydata",
     "proxychains", "proxychains4", "catchsegv", "busybox", "nocache",
-    "xargs",
+    "flock", "watch", "unbuffer", "caffeinate", "systemd-run",
+    "runuser", "chroot", "nsenter", "unshare", "prlimit", "firejail",
+    "strace", "ltrace", "valgrind", "faketime", "fakeroot", "torsocks",
+    "sg", "script", "xvfb-run", "dbus-run-session", "pkexec",
+    "su", "uv", "poetry", "pipenv", "rye", "hatch", "pdm",
 }
 
+# xargs / parallel read targets from stdin, so a destructive command run
+# under them always has targets we cannot see. Handled separately (never
+# plain-unwrapped) so the missing targets force a fail-closed refusal.
+_XARGS = {"xargs", "parallel"}
+
 # Per-wrapper options that consume a *separate* following argument when
-# given un-glued (``nice -n 19``, ``sudo -u root``). Glued forms
-# (``-n19``, ``-c3``, ``-oL``) carry their value inline and take no
-# extra token. Options not listed are assumed to take no separate arg.
+# given un-glued (``nice -n 19``, ``sudo -u root``). Glued forms (``-n19``,
+# ``-c3``, ``-oL``) carry their value inline and take no extra token.
 _WRAPPER_OPTS_WITH_ARG: dict[str, set[str]] = {
     "sudo": {"-u", "--user", "-g", "--group", "-C", "--close-from",
              "-p", "--prompt", "-r", "--role", "-t", "--type",
-             "-U", "--other-user", "-h", "--host"},
+             "-U", "--other-user", "-h", "--host", "-D", "--chdir",
+             "-R", "--chroot"},
     "doas": {"-u", "-C"},
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
     "nice": {"-n", "--adjustment"},
@@ -151,33 +179,47 @@ _WRAPPER_OPTS_WITH_ARG: dict[str, set[str]] = {
 }
 
 # Wrappers that eat a positional argument BEFORE the command
-# (``timeout DURATION cmd``).
-_WRAPPER_LEADING_POSITIONAL: dict[str, int] = {"timeout": 1}
+# (``timeout DURATION cmd``, ``flock FILE cmd``, ``chroot DIR cmd``,
+# ``sg GROUP cmd``, ``chrt PRIO cmd`` when no -p, ``taskset MASK cmd``).
+_WRAPPER_LEADING_POSITIONAL: dict[str, int] = {
+    "timeout": 1, "flock": 1, "chroot": 1, "sg": 1, "chrt": 1, "taskset": 1,
+}
 
 
 def _is_assignment(tok: str) -> bool:
-    """True for env/sudo NAME=VALUE assignment tokens."""
+    """True for NAME=VALUE assignment tokens (env/sudo prefix or shell)."""
     if "=" not in tok or tok.startswith("-"):
         return False
     name = tok.split("=", 1)[0]
     return name.isidentifier()
 
 
+def _first_destructive_index(tokens: list[str]) -> int | None:
+    """Index of the first token whose basename is a destructive command."""
+    for idx, t in enumerate(tokens):
+        if _strip_path(t) in _DESTRUCTIVE_NAMES:
+            return idx
+    return None
+
+
 def _unwrap_wrappers(tokens: list[str]) -> list[str]:
     """Strip leading command-runner wrappers so the real command shows.
 
-    ``sudo rm -rf /etc`` → ``rm -rf /etc``. Handles nested wrappers
-    (``sudo nice rm ...``). Wrapper options, their arguments, and
-    ``env``/``sudo`` NAME=VAL assignments are consumed. If the inner
-    command cannot be located the original tokens are returned unchanged
-    (callers then find nothing — identical to the pre-unwrap behaviour),
-    so unwrapping can only ever ADD a block, never remove one.
+    ``sudo rm -rf /etc`` -> ``rm -rf /etc``; handles nested wrappers and,
+    as a fallback, scans for a destructive verb after a wrapper whose
+    options/positionals we did not model exactly. Returns the tokens
+    unchanged when nothing destructive can be located, so unwrapping only
+    ever ADDS a block, never removes one.
     """
+    unwrapped_any = False
     guard = 0
     while tokens and guard < 16:
         guard += 1
         w = _strip_path(tokens[0])
         if w not in _WRAPPERS:
+            break
+        # ``command -v/-V NAME`` describes NAME, it does not run it.
+        if w == "command" and ("-v" in tokens[1:] or "-V" in tokens[1:]):
             break
         rest = tokens[1:]
         opts_with_arg = _WRAPPER_OPTS_WITH_ARG.get(w, set())
@@ -194,7 +236,7 @@ def _unwrap_wrappers(tokens: list[str]) -> list[str]:
                 else:
                     i += 1
                 continue
-            if w in ("env", "sudo") and _is_assignment(a):
+            if _is_assignment(a):
                 i += 1
                 continue
             if leading_positional > 0:
@@ -204,9 +246,181 @@ def _unwrap_wrappers(tokens: list[str]) -> list[str]:
             break
         new_tokens = rest[i:]
         if not new_tokens:
-            return tokens
+            return tokens if not unwrapped_any else tokens
+        unwrapped_any = True
         tokens = new_tokens
+
+    if unwrapped_any and tokens:
+        head = _strip_path(tokens[0])
+        if head not in _DESTRUCTIVE_NAMES and head not in _SHELLS:
+            idx = _first_destructive_index(tokens)
+            if idx is not None:
+                return tokens[idx:]
     return tokens
+
+
+def wrapper_cwds(tokens: list[str]) -> list[str | None]:
+    """Working directories a wrapper imposes on the command it runs.
+
+    ``sudo -D DIR``, ``env -C DIR``, ``chroot DIR`` (its new root) and
+    ``systemd-run`` (which runs in ``/`` unless ``--same-dir`` or
+    ``--working-directory`` is given) change where relative targets land.
+    Returns the extra directories to judge against; ``None`` means the
+    directory cannot be determined (callers fail closed).
+    """
+    out: list[str | None] = []
+    toks = list(tokens)
+    guard = 0
+    while toks and guard < 16:
+        guard += 1
+        w = _strip_path(toks[0])
+        if w not in _WRAPPERS:
+            break
+        args = toks[1:]
+        for i, a in enumerate(args):
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if (w == "sudo" and a in ("-D", "--chdir")) or (
+                w == "env" and a in ("-C", "--chdir")
+            ):
+                out.append(nxt)
+            elif w in ("sudo", "env") and a.startswith("--chdir="):
+                out.append(a.split("=", 1)[1])
+            elif w == "env" and a.startswith("-C") and len(a) > 2:
+                out.append(a[2:])
+            elif w == "sudo" and a in ("-i", "--login"):
+                out.append(None)
+            elif w == "nsenter" and (a in ("-w", "--wd") or a.startswith("--wd")):
+                out.append(a.split("=", 1)[1] if "=" in a else None)
+            elif w == "unshare" and (a in ("-w", "--wd") or a.startswith("--wd=")):
+                out.append(a.split("=", 1)[1] if "=" in a else nxt)
+        if w == "chroot":
+            pos = [a for a in args if not a.startswith("-")]
+            if pos:
+                out.append(pos[0])
+        if w == "systemd-run":
+            wd = [a.split("=", 1)[1] for a in args if a.startswith("--working-directory=")]
+            if wd:
+                out.extend(wd)
+            elif not ({"-d", "--same-dir"} & set(args)):
+                out.append("/")
+        inner = _unwrap_wrappers([toks[0]] + args)
+        if inner == toks or not inner:
+            break
+        toks = inner if _strip_path(inner[0]) in _WRAPPERS else []
+    return out
+
+
+def _xargs_utility(tokens: list[str]) -> list[str] | None:
+    """If tokens run xargs/parallel, return the utility argv it runs."""
+    toks = _unwrap_wrappers(tokens)
+    if not toks or _strip_path(toks[0]) not in _XARGS:
+        return None
+    rest = toks[1:]
+    opts_with_arg = _WRAPPER_OPTS_WITH_ARG.get("xargs", set())
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--":
+            i += 1
+            break
+        if a.startswith("-") and a != "-":
+            i += 2 if (a in opts_with_arg and i + 1 < len(rest)) else 1
+            continue
+        break
+    return rest[i:]
+
+
+def _find_dash_c(args: list[str]) -> str | None:
+    """Return the STRING of a ``-c STRING`` (or ``-lc STRING``) option."""
+    for i, a in enumerate(args):
+        if a == "-c":
+            j = i + 1
+            if j < len(args) and args[j] == "--":
+                j += 1
+            return args[j] if j < len(args) else None
+        if (
+            a.startswith("-")
+            and not a.startswith("--")
+            and len(a) > 1
+            and a.endswith("c")
+            and a[1:].isalpha()
+        ):
+            return args[i + 1] if i + 1 < len(args) else None
+    return None
+
+
+def extract_command_strings(tokens: list[str]) -> list[str]:
+    """Return inner command strings to be checked recursively.
+
+    Covers ``<shell> -c STR``, ``env -S STR``, ``su/runuser/script/flock/
+    sg -c STR``, ``sg GROUP STR``, ``watch STR``, and
+    ``find ... -exec <shell> -c STR``. Wrappers are unwrapped first so
+    ``sudo sh -c STR`` and ``xargs sh -c STR`` are covered too.
+    """
+    out: list[str] = []
+    candidates = [list(tokens)]
+    unwrapped = _unwrap_wrappers(list(tokens))
+    if unwrapped != list(tokens):
+        candidates.append(unwrapped)
+    xu = _xargs_utility(list(tokens))
+    if xu:
+        candidates.append(xu)
+    for toks in candidates:
+        for s in _extract_from(toks):
+            if s not in out:
+                out.append(s)
+    return out
+
+
+def _extract_from(toks: list[str]) -> list[str]:
+    if not toks:
+        return []
+    cmd = _strip_path(toks[0])
+    args = toks[1:]
+    out: list[str] = []
+
+    if cmd == "eval" and args:
+        out.append(" ".join(args))
+
+    if cmd == "env":
+        for i, a in enumerate(args):
+            if a in ("-S", "--split-string") and i + 1 < len(args):
+                out.append(args[i + 1])
+            elif a.startswith("--split-string="):
+                out.append(a[len("--split-string="):])
+            elif a.startswith("-S") and len(a) > 2:
+                out.append(a[2:])
+
+    if cmd in _SHELLS or cmd in ("su", "runuser", "script", "flock", "sg", "watch"):
+        s = _find_dash_c(args)
+        if s is not None:
+            out.append(s)
+
+    if cmd == "sg":
+        pos = [a for a in args if not a.startswith("-")]
+        if len(pos) >= 2:
+            out.append(pos[1])
+
+    if cmd == "watch":
+        pos = [a for a in args if not a.startswith("-")]
+        if len(pos) == 1 and " " in pos[0]:
+            out.append(pos[0])
+
+    if cmd == "find":
+        for flag in ("-exec", "-execdir"):
+            if flag in args:
+                k = args.index(flag) + 1
+                ex: list[str] = []
+                j = k
+                while j < len(args) and args[j] not in (";", "+"):
+                    ex.append(args[j])
+                    j += 1
+                if ex and _strip_path(ex[0]) in _SHELLS:
+                    s = _find_dash_c(ex[1:])
+                    if s is not None:
+                        out.append(s)
+
+    return out
 
 
 def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
@@ -217,6 +431,17 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
     if not tokens:
         return None
 
+    xu = _xargs_utility(tokens)
+    if xu is not None:
+        inner = identify_destructive(xu) if xu else None
+        if inner is None:
+            return None
+        return DestructiveAction(
+            command=inner.command, targets=inner.targets, flags=inner.flags,
+            source=f"xargs {inner.source} (more targets arrive on stdin)",
+            stdin_targets=True,
+        )
+
     tokens = _unwrap_wrappers(tokens)
     if not tokens:
         return None
@@ -226,7 +451,7 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
     flags, non_flags = _parse_flags_targets(args)
 
     # ── rm, rmdir, shred, srm ───────────────────────────────────────
-    if cmd in ("rm", "rmdir", "shred", "srm"):
+    if cmd in ("rm", "rmdir", "shred", "srm", "unlink"):
         return DestructiveAction(
             command=cmd,
             targets=non_flags,
@@ -291,6 +516,15 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
                 source="dd — writes to of= target, overwriting existing data",
             )
 
+    # ── tee (truncates each output file unless -a/--append) ──────────
+    if cmd == "tee":
+        appends = "-a" in flags or "--append" in flags
+        if not appends and non_flags:
+            return DestructiveAction(
+                command=cmd, targets=non_flags, flags=flags,
+                source="tee — truncates and overwrites each output file",
+            )
+
     # ── find ... -delete ─────────────────────────────────────────────
     if cmd == "find":
         if "-delete" in args:
@@ -298,6 +532,15 @@ def identify_destructive(tokens: list[str]) -> DestructiveAction | None:
                 command=cmd, targets=_find_search_paths(args), flags=flags,
                 source="find -delete — deletes matched files",
             )
+        # -fprint / -fprintf / -fls FILE — truncate and write to FILE.
+        for wflag in ("-fprint", "-fprintf", "-fls"):
+            if wflag in args:
+                widx = args.index(wflag)
+                if widx + 1 < len(args):
+                    return DestructiveAction(
+                        command=cmd, targets=[args[widx + 1]], flags=flags,
+                        source=f"find {wflag} — truncates and writes to the named file",
+                    )
         # -exec / -execdir <cmd> — a deletion command run per match.
         for exec_flag in ("-exec", "-execdir"):
             if exec_flag in args:
@@ -644,4 +887,6 @@ __all__ = [
     "RiskWarning",
     "identify_destructive",
     "identify_risks",
+    "extract_command_strings",
+    "wrapper_cwds",
 ]
