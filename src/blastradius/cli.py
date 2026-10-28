@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
-from .check import check_command
+from .check import check_argv, check_command
 from .report import format_allowed, format_multi_refusal, format_refusal, format_warnings
 
 
@@ -84,10 +85,10 @@ def _cmd_wrapper(command_args: list[str], *, strict: bool = False, quiet: bool =
         print("blastradius: no command given after --", file=sys.stderr)
         return 2
 
-    # Reconstruct the command string.
-    command = " ".join(command_args)
-
-    result = check_command(command)
+    # Evaluate the exact argv vector that os.execvp will run (do not join with
+    # spaces and re-parse as raw shell).
+    command = shlex.join(command_args)
+    result = check_argv(command_args)
 
     # ── In strict mode, warnings become blocks ─────────────────────
     if strict and result.has_warnings and result.allowed:

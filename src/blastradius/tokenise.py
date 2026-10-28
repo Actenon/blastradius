@@ -267,11 +267,18 @@ def _split_into_segments(s: str) -> tuple[list[list[str]], list[str]]:
                 i += 2
                 continue
 
-        # Check for single-char operators: ;, |
+        # Check for single-char operators: ;, |, & (excluding >&, &>, <& redirects)
         if c in (";", "|"):
             split_points.append((i, i + 1, c))
             i += 1
             continue
+        if c == "&":
+            prev_c = s[i - 1] if i > 0 else ""
+            next_c = s[i + 1] if i + 1 < len(s) else ""
+            if prev_c not in (">", "<") and next_c != ">":
+                split_points.append((i, i + 1, c))
+                i += 1
+                continue
 
         i += 1
 
