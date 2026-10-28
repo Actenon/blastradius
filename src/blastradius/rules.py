@@ -60,7 +60,13 @@ FLOOR_EXACT: set[str] = {
     "/System",
     "/Library",
     "/opt",
+    "/tmp",
     "/private",  # macOS /private symlink target
+    "/private/etc",
+    "/private/var",
+    "/private/tmp",
+    "/System/Volumes/Data",
+    "/System/Volumes/Data/home",
     "/root",
     "/boot",
     "/dev",
@@ -116,19 +122,27 @@ def is_floor(path: str, *, home: str | None = None) -> bool:
     if home is None:
         home = os.path.expanduser("~")
 
+    norm = os.path.normpath(path)
     real = os.path.realpath(path)
+    norm_home = os.path.normpath(home) if home else ""
+    real_home = os.path.realpath(home) if home else ""
+    private_stripped = real[len("/private"):] if real.startswith("/private/") else None
 
     # $HOME itself.
-    if real == os.path.realpath(home):
+    if home and (
+        real in (real_home, norm_home)
+        or norm in (real_home, norm_home)
+        or (private_stripped is not None and private_stripped in (real_home, norm_home))
+    ):
         return True
 
     # Explicit floor list.
-    if real in FLOOR_EXACT:
-        return True
-
-    # Also check the un-realpath'd version (in case realpath resolves
-    # a symlink to a floor path — e.g. /private/etc → /etc on macOS).
-    if path in FLOOR_EXACT:
+    if (
+        real in FLOOR_EXACT
+        or norm in FLOOR_EXACT
+        or path in FLOOR_EXACT
+        or (private_stripped is not None and private_stripped in FLOOR_EXACT)
+    ):
         return True
 
     # Depth ≤ 1 from root: / or /single-component.

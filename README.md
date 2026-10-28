@@ -158,15 +158,17 @@ There is no flag, no config entry, and no environment variable that can make the
 
 ## What it refuses to model
 
-blastradius v1 refuses to parse commands containing:
+blastradius refuses to parse raw shell commands containing:
 
-- `;` (command separator)
+- `;`, `&` (command and background separators)
 - `&&` or `||` (conditional execution)
 - `|` (pipeline)
 - `$(...)` or backticks (command substitution)
 - `<(...)` or `>(...)` (process substitution)
-- `eval`
+- `eval` or `env -C` / `env --chdir` (runtime working-directory mutation)
 - Subshells starting with `(`
+
+Quoted separators (e.g. `rm "foo;bar"`) are preserved as literal arguments. In wrapper mode (`blastradius -- <cmd> <args...>`), `check_argv()` evaluates the pre-tokenised `argv` vector directly without re-joining arguments with spaces.
 
 This is a feature, not a limitation. If we can't fully model what the command will do, we refuse it. The user can run it themselves outside the agent — the guard is for the agent path, not the human path.
 
@@ -198,7 +200,7 @@ Every refusal names a rule ID:
 - Python 3.10+
 - Zero runtime dependencies
 - Sub-millisecond decision time (well under the 10ms target)
-- 198 tests, including all six reconstructed incidents, a wrapper/expansion bypass suite, and a full must-allow suite
+- 203 tests, including all six reconstructed incidents, a wrapper/expansion bypass suite, and a full must-allow suite
 
 ## License
 

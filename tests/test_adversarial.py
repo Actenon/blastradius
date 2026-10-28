@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from blastradius.check import check_command
+from blastradius.check import check_argv, check_command
 from blastradius.commands import identify_destructive
 from blastradius.rules import Scope, _match_scope
 from blastradius.tokenise import tokenise
@@ -346,3 +346,105 @@ class TestDotDotEscape:
         )
         assert not result.allowed
         assert result.first_refusal.rule == "out-of-scope"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# BUG 9 (F08): Compound working-directory / state-changing bypass
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestF08CompoundWorkingDirectoryBypass:
+    """Raw-shell mode must refuse compound commands (`cd sibling && rm marker`)
+    and runtime working-directory changes (`env -C sibling rm marker`), while
+    preserving quoted literal separators and keeping argv wrapper mode distinct.
+    """
+
+    def test_cd_and_rm_outside_scope_refused(self, tmp_path):
+        work = tmp_path / "work"
+        outside = tmp_path / "outside"
+        work.mkdir()
+        outside.mkdir()
+        (outside / "marker").write_text("do-not-delete")
+        scope = Scope(allow=[f"{work}/**"], repo_root=str(work))
+
+        for sep in ("&&", ";", "||", "|", "&"):
+            result = check_command(
+                f"cd {outside} {sep} rm marker",
+                cwd=str(work),
+                scope=scope,
+            )
+            assert not result.allowed
+            assert result.first_refusal is not None
+            assert result.first_refusal.rule == "unparseable-command-compound"
+
+    def test_env_chdir_rm_outside_scope_refused(self, tmp_path):
+        work = tmp_path / "work"
+        outside = tmp_path / "outside"
+        work.mkdir()
+        outside.mkdir()
+        scope = Scope(allow=[f"{work}/**"], repo_root=str(work))
+
+        for cmd in (
+            f"env -C {outside} rm marker",
+            f"env --chdir={outside} rm marker",
+        ):
+            result = check_command(cmd, cwd=str(work), scope=scope)
+            assert not result.allowed
+            assert result.first_refusal is not None
+            assert result.first_refusal.rule == "unparseable-command-chdir"
+
+    def test_nested_sh_c_compound_refused(self, tmp_path):
+        work = tmp_path / "work"
+        outside = tmp_path / "outside"
+        work.mkdir()
+        outside.mkdir()
+        scope = Scope(allow=[f"{work}/**"], repo_root=str(work))
+
+        result = check_command(
+            f"sh -c 'cd {outside} && rm marker'",
+            cwd=str(work),
+            scope=scope,
+        )
+        assert not result.allowed
+        assert result.first_refusal is not None
+        assert result.first_refusal.rule == "unparseable-command-compound"
+
+    def test_quoted_separator_in_raw_shell_still_allowed_in_scope(self, tmp_path):
+        work = tmp_path / "work"
+        work.mkdir()
+        target = work / "foo;bar"
+        target.write_text("literal semicolon filename")
+        scope = Scope(allow=[f"{work}/**"], repo_root=str(work))
+
+        result = check_command(
+            'rm "foo;bar"',
+            cwd=str(work),
+            scope=scope,
+        )
+        assert result.allowed
+
+    def test_argv_wrapper_mode_preserves_literal_arguments(self, tmp_path):
+        work = tmp_path / "work"
+        outside = tmp_path / "outside"
+        work.mkdir()
+        outside.mkdir()
+        scope = Scope(allow=[f"{work}/**"], repo_root=str(work))
+
+        # In-scope file with semicolon and spaces in argv item is allowed:
+        in_scope_result = check_argv(
+            ["rm", "-f", "file with ; and && in name.txt"],
+            cwd=str(work),
+            scope=scope,
+        )
+        assert in_scope_result.allowed
+
+        # Out-of-scope file in argv mode is still blocked:
+        out_of_scope_result = check_argv(
+            ["rm", "-f", str(outside / "marker")],
+            cwd=str(work),
+            scope=scope,
+        )
+        assert not out_of_scope_result.allowed
+        assert out_of_scope_result.first_refusal is not None
+        assert out_of_scope_result.first_refusal.rule == "out-of-scope"
+
